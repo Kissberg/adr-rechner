@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="error-page">
+    <div class="error-code">{{ error_code }}</div>
+    <div class="error-title">
+        {% if error_code == 404 %}
+            Seite nicht gefunden
+        {% elif error_code == 500 %}
+            Interner Serverfehler
+        {% elif error_code == 501 %}
+            Funktion nicht verfügbar
+        {% else %}
+            Fehler
+        {% endif %}
+    </div>
+    <p class="error-description">{{ error_message }}</p>
+    <a href="{{ url_for('index') }}" class="btn btn-primary btn-lg">
+        <i class="bi bi-house-door me-2"></i>Zurück zur Startseite
+    </a>
+</div>
+{% endblock %}

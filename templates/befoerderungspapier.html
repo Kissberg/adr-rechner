@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Beförderungspapier #{{ shipment_id }} — ADR Transportdokument{% endblock %}
+
+{% block content %}
+<div class="row mt-3">
+    <div class="col-12">
+        <h1>
+            <i class="bi bi-file-text me-2"></i>
+            Beförderungspapier #{{ shipment_id }}
+        </h1>
+        <p class="text-muted">
+            Sendungsdetails und Gefahrgutpositionen gemäß ADR 5.4.1.
+        </p>
+    </div>
+</div>
+
+{% if shipment %}
+<div class="row">
+    <div class="col-12">
+        <!-- Action buttons -->
+        <div class="d-flex justify-content-end mb-3">
+            <a href="{{ url_for('download_transport_pdf', id=shipment_id) }}"
+               class="btn btn-danger">
+                <i class="bi bi-file-earmark-pdf me-1"></i>PDF herunterladen
+            </a>
+        </div>
+
+        <!-- Shipment overview -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <i class="bi bi-info-circle me-2"></i>Sendungsübersicht
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <table class="table table-sm table-borderless mb-0">
+                            <tr>
+                                <td class="fw-bold" style="width: 120px;">Sendungs-ID:</td>
+                                <td>{{ shipment["id"] }}</td>
+                            </tr>
+                            <tr>
+                                <td class="fw-bold">Erstellt am:</td>
+                                <td>{{ shipment["created_at"] }}</td>
+                            </tr>
+                            <tr>
+                                <td class="fw-bold">Absender:</td>
+                                <td>{{ shipment["sender_name"] or "—" }}</td>
+                            </tr>
+                            <tr>
+                                <td class="fw-bold">Empfänger:</td>
+                                <td>{{ shipment["customer_name"] or "—" }}</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <table class="table table-sm table-borderless mb-0">
+                            <tr>
+                                <td class="fw-bold" style="width: 140px;">Gesamtpunkte:</td>
+                                <td>
+                                    <span class="badge {% if shipment['is_exempt'] %}bg-success{% else %}bg-warning text-dark{% endif %} fs-6">
+                                        {{ "%.1f" | format(shipment["total_points"]|float) }}
+                                    </span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="fw-bold">Freigestellt (1.1.3.6):</td>
+                                <td>
+                                    {% if shipment["is_exempt"] %}
+                                    <span class="text-success fw-bold">Ja</span>
+                                    {% else %}
+                                    <span class="text-danger fw-bold">Nein</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="fw-bold">Bestehendes PDF:</td>
+                                <td>
+                                    {% if shipment["bef_papier_path"] %}
+                                    <i class="bi bi-check-circle text-success"></i> Vorhanden
+                                    {% else %}
+                                    <span class="text-muted">Noch nicht generiert</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dangerous goods items -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-exclamation-triangle me-2"></i>Gefahrgutpositionen
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-striped mb-0">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>UN-Nummer</th>
+                                <th>Bezeichnung des Gutes</th>
+                                <th>Menge</th>
+                                <th>Kat.</th>
+                                <th>Faktor</th>
+                                <th>Punkte</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in items %}
+                            <tr>
+                                <td><code>{{ item["un_number"] }}</code></td>
+                                <td>{{ item["substance_name"] or "—" }}</td>
+                                <td>{{ item["quantity"] }} {{ item["unit"] }}</td>
+                                <td>{{ item["transport_category"] or "—" }}</td>
+                                <td>{{ item["points_factor"] or "0" }}</td>
+                                <td>{{ item["item_points"] }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+{% else %}
+<div class="row">
+    <div class="col-12">
+        <div class="alert alert-warning">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            <strong>Nicht gefunden:</strong> Sendung #{{ shipment_id }} existiert nicht.
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

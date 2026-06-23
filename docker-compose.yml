@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  adr-rechner:
+    image: adr-rechner:latest
+    container_name: adr-rechner
+    restart: unless-stopped
+    ports:
+      - "5050:5050"
+    volumes:
+      - adr_data:/app/data
+      - adr_exports:/app/exports
+    environment:
+      - FLASK_ENV=production
+      - TZ=Europe/Berlin
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  adr_data:
+  adr_exports:

@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.env
+*.db
+data/adr.db
+data/*.db
+exports/
+adr_exports/
+*.tar
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo

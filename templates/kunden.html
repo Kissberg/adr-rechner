@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+
+{% block title %}Kundenverwaltung — ADR 1000-Punkte-Rechner{% endblock %}
+
+{% block content %}
+<div class="row mt-3">
+    <div class="col-12">
+        <h1>
+            <i class="bi bi-people me-2"></i>
+            Kundenverwaltung
+        </h1>
+        <p class="text-muted">
+            Verwalten Sie Ihre Kunden (Empfänger) für Gefahrguttransporte.
+        </p>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-4">
+                        <label for="searchInput" class="form-label fw-semibold small mb-1">
+                            <i class="bi bi-search me-1"></i>Suche
+                        </label>
+                        <input type="text" id="searchInput" class="form-control"
+                               placeholder="Name oder Stadt eingeben...">
+                    </div>
+                    <div class="col-md-8 text-md-end">
+                        <div class="btn-group">
+                            <button id="addCustomerBtn" class="btn btn-primary">
+                                <i class="bi bi-plus-lg me-1"></i>Neuer Kunde
+                            </button>
+                            <button id="excelImportBtn" class="btn btn-outline-success"
+                                    data-bs-toggle="modal" data-bs-target="#excelImportModal">
+                                <i class="bi bi-file-earmark-excel me-1"></i>Excel importieren
+                            </button>
+                            <a href="/api/kunden/template" class="btn btn-outline-secondary"
+                               title="Excel-Vorlage herunterladen">
+                                <i class="bi bi-download me-1"></i>Excel-Vorlage herunterladen
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-list-ul me-2"></i>Kundenliste <span id="customerCount" class="badge bg-secondary ms-1">0</span></span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive data-table-container">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Name</th>
+                                <th>Straße</th>
+                                <th>PLZ</th>
+                                <th>Stadt</th>
+                                <th>Land</th>
+                                <th>Telefon</th>
+                                <th>E-Mail</th>
+                                <th class="text-end">Aktionen</th>
+                            </tr>
+                        </thead>
+                        <tbody id="customersTableBody">
+                            <tr id="noCustomersRow">
+                                <td colspan="8" class="text-center text-muted py-4">
+                                    <i class="bi bi-inbox" style="font-size: 2rem;"></i>
+                                    <p class="mt-2 mb-0">Keine Kunden vorhanden.</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Customer Modal (Add/Edit) -->
+<div class="modal fade" id="customerModal" tabindex="-1" aria-labelledby="customerModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title" id="customerModalLabel">
+                    <i class="bi bi-person-plus me-2"></i>Neuer Kunde
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <form id="customerForm" novalidate>
+                    <input type="hidden" id="customerId" value="">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="custName" class="form-label">Name <span class="text-danger">*</span></label>
+                            <input type="text" id="custName" class="form-control" required
+                                   placeholder="Firmenname oder Personenname">
+                            <div class="invalid-feedback">Der Name ist erforderlich.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="custContact" class="form-label">Ansprechpartner</label>
+                            <input type="text" id="custContact" class="form-control" placeholder="Kontaktperson">
+                        </div>
+                        <div class="col-md-8">
+                            <label for="custStreet" class="form-label">Straße</label>
+                            <input type="text" id="custStreet" class="form-control" placeholder="Straße und Hausnummer">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="custZip" class="form-label">PLZ</label>
+                            <input type="text" id="custZip" class="form-control" placeholder="Postleitzahl">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="custCity" class="form-label">Stadt</label>
+                            <input type="text" id="custCity" class="form-control" placeholder="Stadt">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="custCountry" class="form-label">Land</label>
+                            <input type="text" id="custCountry" class="form-control" value="Deutschland" placeholder="Land">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="custPhone" class="form-label">Telefon</label>
+                            <input type="text" id="custPhone" class="form-control" placeholder="Telefonnummer">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="custEmail" class="form-label">E-Mail</label>
+                            <input type="email" id="custEmail" class="form-control" placeholder="E-Mail-Adresse">
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    <i class="bi bi-x-lg me-1"></i>Abbrechen
+                </button>
+                <button type="button" id="saveCustomerBtn" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i>Speichern
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Excel Import Modal -->
+<div class="modal fade" id="excelImportModal" tabindex="-1" aria-labelledby="excelImportModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title" id="excelImportModalLabel">
+                    <i class="bi bi-file-earmark-excel me-2"></i>Excel importieren
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info small mb-3">
+                    <i class="bi bi-info-circle me-1"></i>
+                    <strong>Erwartete Spalten:</strong> Name, Straße, PLZ, Stadt, Land, Ansprechpartner, Telefon, E-Mail<br>
+                    Die erste Zeile muss die Spaltenüberschriften enthalten.
+                </div>
+                <form id="excelUploadForm" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="excelFile" class="form-label">Excel-Datei (.xlsx)</label>
+                        <input type="file" id="excelFile" class="form-control" accept=".xlsx" required>
+                        <div class="invalid-feedback">Bitte wählen Sie eine .xlsx-Datei aus.</div>
+                    </div>
+                    <div class="d-grid">
+                        <button type="submit" id="uploadExcelBtn" class="btn btn-success">
+                            <i class="bi bi-upload me-1"></i>Import starten
+                        </button>
+                    </div>
+                </form>
+                <div id="importResult" class="mt-3" style="display:none;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title">
+                    <i class="bi bi-exclamation-triangle me-2"></i>Löschen bestätigen
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p id="deleteConfirmMessage">Möchten Sie diesen Kunden wirklich löschen?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+                <button type="button" id="confirmDeleteBtn" class="btn btn-danger">
+                    <i class="bi bi-trash me-1"></i>Löschen
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/kunden.js') }}"></script>
+{% endblock %}

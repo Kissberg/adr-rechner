@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}ADR-Version importieren — ADR 1000-Punkte-Rechner{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2 class="fw-bold">
+            <i class="bi bi-file-earmark-arrow-up me-2"></i>ADR-Version importieren
+        </h2>
+        <p class="text-muted">
+            Importieren Sie UN-Nummern-Daten aus einem ADR Chapter 3.2 Table A PDF.
+            Die bestehenden Einträge werden aktualisiert, neue werden hinzugefügt.
+        </p>
+    </div>
+</div>
+
+<!-- Warnung -->
+<div class="alert alert-warning d-flex align-items-center mb-4" role="alert">
+    <i class="bi bi-exclamation-triangle-fill fs-4 me-2"></i>
+    <div>
+        <strong>Bestehende UN-Daten werden aktualisiert!</strong><br>
+        Beim Import werden vorhandene UN-Nummern mit den neuen Daten überschrieben.
+        Neue UN-Nummern werden hinzugefügt. Stellen Sie sicher, dass Sie die korrekte
+        ADR-Version auswählen.
+    </div>
+</div>
+
+<!-- Import Form -->
+<div class="row mb-4">
+    <div class="col-lg-8">
+        <div class="card shadow-sm">
+            <div class="card-header bg-primary text-white">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-upload me-2"></i>ADR-PDF hochladen
+                </h5>
+            </div>
+            <div class="card-body">
+                <form id="adrImportForm" enctype="multipart/form-data">
+                    <!-- File Upload Area -->
+                    <div class="mb-4">
+                        <label for="pdfFile" class="form-label fw-semibold">ADR Chapter 3.2 PDF</label>
+                        <div id="dropZone" class="border border-2 border-dashed rounded-3 p-5 text-center"
+                             style="cursor: pointer; transition: all 0.2s ease; background-color: #f8f9fa;">
+                            <i class="bi bi-cloud-upload display-3 text-muted mb-3 d-block"></i>
+                            <p class="mb-2 fw-semibold">PDF hier ablegen oder klicken zum Auswählen</p>
+                            <p class="text-muted small mb-0">Unterstützt: ADR Chapter 3.2 Table A (PDF-Format)</p>
+                            <input type="file" id="pdfFile" name="pdfFile" accept=".pdf"
+                                   class="d-none" required>
+                        </div>
+                        <div id="fileInfo" class="mt-2 d-none">
+                            <span class="badge bg-success fs-6" id="fileNameDisplay"></span>
+                            <button type="button" class="btn btn-sm btn-outline-secondary ms-2"
+                                    id="clearFileBtn">
+                                <i class="bi bi-x-circle"></i> Entfernen
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Version Name -->
+                    <div class="mb-4">
+                        <label for="versionName" class="form-label fw-semibold">ADR-Version</label>
+                        <input type="text" class="form-control" id="versionName"
+                               name="versionName" value="ADR 2025"
+                               placeholder="z.B. ADR 2025" required>
+                        <div class="form-text">Geben Sie die ADR-Version an (z.B. &quot;ADR 2025&quot;, &quot;ADR 2023&quot;).</div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="d-flex gap-2">
+                        <button type="button" id="previewBtn" class="btn btn-outline-primary"
+                                disabled>
+                            <i class="bi bi-eye me-1"></i>Vorschau
+                        </button>
+                        <button type="button" id="importBtn" class="btn btn-primary"
+                                disabled>
+                            <i class="bi bi-database-add me-1"></i>Importieren
+                        </button>
+                        <div id="progressSpinner" class="spinner-border text-primary d-none ms-2"
+                             role="status">
+                            <span class="visually-hidden">Lädt...</span>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info Card -->
+    <div class="col-lg-4">
+        <div class="card shadow-sm">
+            <div class="card-header bg-info text-white">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-info-circle me-2"></i>Hinweise
+                </h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-unstyled mb-0 small">
+                    <li class="mb-2">
+                        <i class="bi bi-check2-circle text-success me-1"></i>
+                        <strong>Unterstütztes Format:</strong> ADR Chapter 3.2 Table A (PDF)
+                    </li>
+                    <li class="mb-2">
+                        <i class="bi bi-check2-circle text-success me-1"></i>
+                        <strong>Erkannte Daten:</strong> UN-Nummer, Stoffname, Gefahrklasse,
+                        Verpackungsgruppe, Beförderungskategorie, Tunnelcode, Sondervorschriften
+                    </li>
+                    <li class="mb-2">
+                        <i class="bi bi-exclamation-circle text-warning me-1"></i>
+                        <strong>Vorschau nutzen:</strong> Prüfen Sie die erkannten Daten vor dem Import.
+                    </li>
+                    <li class="mb-2">
+                        <i class="bi bi-shield-check text-primary me-1"></i>
+                        <strong>Punktefaktor:</strong> Wird automatisch aus der Beförderungskategorie
+                        berechnet (0→0, 1→50, 2→3, 3→1, 4→unbegrenzt).
+                    </li>
+                    <li>
+                        <i class="bi bi-arrow-repeat text-info me-1"></i>
+                        <strong>UPDATE-Verhalten:</strong> Bestehende UN-Nummern werden
+                        aktualisiert (Substanzname, Klasse, Kategorie etc.).
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Preview Area -->
+<div id="previewArea" class="row mb-4 d-none">
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-table me-2"></i>Vorschau — Erkannte Einträge
+                </h5>
+                <span class="badge bg-primary fs-6" id="previewCount">0 Einträge</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 500px; overflow-y: auto;">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-dark sticky-top">
+                            <tr>
+                                <th>UN-Nummer</th>
+                                <th>Stoffbezeichnung</th>
+                                <th>Klasse</th>
+                                <th>VG</th>
+                                <th>Kat.</th>
+                                <th>Tunnelcode</th>
+                                <th>Sondervorschriften</th>
+                            </tr>
+                        </thead>
+                        <tbody id="previewTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Import Result -->
+<div id="importResult" class="row mb-4 d-none">
+    <div class="col-12">
+        <div id="importResultAlert" class="alert" role="alert"></div>
+    </div>
+</div>
+
+<!-- Version History -->
+<div class="row">
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-header bg-secondary text-white">
+                <h5 class="card-title mb-0">
+                    <i class="bi bi-clock-history me-2"></i>Import-Verlauf
+                </h5>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>ID</th>
+                                <th>Version</th>
+                                <th>Import-Datum</th>
+                                <th>Datei</th>
+                                <th>Neu importiert</th>
+                                <th>Aktualisiert</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTableBody">
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-3">
+                                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                    Lade Verlauf...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/adr_import.js') }}"></script>
+{% endblock %}

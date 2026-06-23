@@ -1,0 +1,541 @@
+/* ==========================================================================
+   ADR 1000-Punkte-Rechner — Hauptstylesheet
+   PC-optimiertes Design für Desktop-Arbeitsplätze (min. 1280px Breite).
+   Deutsche Typografie mit klarer, professioneller Darstellung.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Basis & Reset
+   -------------------------------------------------------------------------- */
+:root {
+    --adr-green: #1A3A32;
+    --adr-green-dark: #0F2520;
+    --adr-cream: #F1EBE5;
+    --adr-accent: #2D5A4E;
+    --adr-green-light: #3A6B5C;
+}
+
+html {
+    font-size: 15px;  /* Basis-Schriftgröße für PC-Bildschirme */
+}
+
+body {
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.6;
+    color: #212529;
+    background-color: #f5f7fa;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Navigation Bar */
+.adr-navbar {
+    background-color: var(--adr-green) !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.adr-navbar .nav-link {
+    color: var(--adr-cream) !important;
+    font-weight: 500;
+    padding: 0.6rem 1rem;
+    transition: background 0.2s;
+}
+
+.adr-navbar .nav-link:hover,
+.adr-navbar .nav-link.active {
+    background-color: var(--adr-accent);
+    border-radius: 6px;
+}
+
+.adr-navbar .nav-link i {
+    opacity: 0.8;
+}
+
+.adr-brand {
+    color: var(--adr-cream);
+    font-weight: 700;
+    font-size: 1.2rem;
+    letter-spacing: 0.5px;
+}
+
+.adr-navbar .navbar-toggler {
+    border-color: var(--adr-cream);
+}
+
+.adr-navbar .navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba(241, 235, 229, 1)' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+/* Brand Buttons */
+.btn-primary, .btn-primary:hover, .btn-primary:focus, .btn-primary:active {
+    background-color: var(--adr-green) !important;
+    border-color: var(--adr-green-dark) !important;
+}
+
+.btn-outline-primary {
+    color: var(--adr-green);
+    border-color: var(--adr-green);
+}
+
+.btn-outline-primary:hover {
+    background-color: var(--adr-green);
+    border-color: var(--adr-green);
+    color: white;
+}
+
+main {
+    flex: 1;
+    padding-top: 1.5rem;
+    padding-bottom: 3rem;
+}
+
+/* --------------------------------------------------------------------------
+   Typografie
+   -------------------------------------------------------------------------- */
+h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+    color: #1a1a2e;
+    margin-bottom: 1rem;
+}
+
+h1 {
+    font-size: 1.75rem;
+    border-bottom: 2px solid #dee2e6;
+    padding-bottom: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+h2 {
+    font-size: 1.4rem;
+    margin-top: 1.5rem;
+}
+
+h3 {
+    font-size: 1.15rem;
+    color: #495057;
+}
+
+.text-muted {
+    color: #6c757d !important;
+}
+
+small, .small {
+    font-size: 0.85rem;
+}
+
+/* --------------------------------------------------------------------------
+   Navigation — Anpassungen
+   -------------------------------------------------------------------------- */
+.navbar {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    min-height: 56px;
+}
+
+.navbar-brand {
+    font-size: 1.15rem;
+    letter-spacing: 0.02em;
+}
+
+.navbar-dark .navbar-nav .nav-link {
+    padding: 0.5rem 1rem;
+    font-size: 0.95rem;
+    border-radius: 4px;
+    margin: 0 0.1rem;
+    transition: background-color 0.15s ease;
+}
+
+.navbar-dark .navbar-nav .nav-link:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.navbar-dark .navbar-nav .nav-link.active {
+    background-color: rgba(255, 255, 255, 0.18);
+    font-weight: 500;
+}
+
+/* --------------------------------------------------------------------------
+   Karten (Cards)
+   -------------------------------------------------------------------------- */
+.card {
+    border: 1px solid #dde2e8;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    margin-bottom: 1.25rem;
+    background-color: #ffffff;
+}
+
+.card-header {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #dde2e8;
+    font-weight: 600;
+    font-size: 1rem;
+    padding: 0.75rem 1.25rem;
+}
+
+.card-body {
+    padding: 1.25rem;
+}
+
+/* --------------------------------------------------------------------------
+   Formulare
+   -------------------------------------------------------------------------- */
+.form-label {
+    font-weight: 500;
+    font-size: 0.9rem;
+    color: #495057;
+    margin-bottom: 0.35rem;
+}
+
+.form-control,
+.form-select {
+    font-size: 0.95rem;
+    border: 1px solid #ced4da;
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    background-color: #ffffff;
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.15);
+    outline: none;
+}
+
+.form-control::placeholder {
+    color: #adb5bd;
+    font-style: italic;
+}
+
+.form-control-lg {
+    font-size: 1.05rem;
+    padding: 0.6rem 0.9rem;
+}
+
+.form-control-sm {
+    font-size: 0.85rem;
+    padding: 0.3rem 0.5rem;
+}
+
+/* Eingabegruppen */
+.input-group .form-control {
+    border-right: none;
+}
+
+.input-group-text {
+    background-color: #f8f9fa;
+    border: 1px solid #ced4da;
+    font-size: 0.9rem;
+    color: #6c757d;
+}
+
+/* Pflichtfelder */
+.form-label.required::after {
+    content: " *";
+    color: #dc3545;
+    font-weight: bold;
+}
+
+/* Ungültige Eingaben */
+.form-control.is-invalid {
+    border-color: #dc3545;
+    background-image: none;  /* Bootstrap-Icon in deutschem Kontext nicht optimal */
+}
+
+.invalid-feedback {
+    font-size: 0.82rem;
+    color: #dc3545;
+    margin-top: 0.25rem;
+}
+
+/* --------------------------------------------------------------------------
+   Tabellen
+   -------------------------------------------------------------------------- */
+.table {
+    font-size: 0.92rem;
+    vertical-align: middle;
+}
+
+.table thead th {
+    background-color: #f1f3f5;
+    border-bottom: 2px solid #dee2e6;
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #495057;
+    white-space: nowrap;
+}
+
+.table tbody tr:hover {
+    background-color: #f8f9ff;
+}
+
+.table-striped > tbody > tr:nth-of-type(odd) > * {
+    background-color: rgba(0, 0, 0, 0.02);
+}
+
+/* --------------------------------------------------------------------------
+   Buttons
+   -------------------------------------------------------------------------- */
+.btn {
+    font-weight: 500;
+    font-size: 0.92rem;
+    border-radius: 6px;
+    padding: 0.45rem 1rem;
+    transition: all 0.15s ease;
+}
+
+.btn-sm {
+    font-size: 0.82rem;
+    padding: 0.3rem 0.65rem;
+}
+
+.btn-lg {
+    font-size: 1.05rem;
+    padding: 0.6rem 1.5rem;
+}
+
+.btn-primary {
+    background-color: #0d6efd;
+    border-color: #0b5ed7;
+}
+
+.btn-primary:hover {
+    background-color: #0b5ed7;
+    border-color: #0a58ca;
+}
+
+.btn-success {
+    background-color: #198754;
+    border-color: #157347;
+}
+
+.btn-outline-primary {
+    border-color: #0d6efd;
+    color: #0d6efd;
+}
+
+.btn-outline-primary:hover {
+    background-color: #0d6efd;
+    color: #ffffff;
+}
+
+.btn-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+/* --------------------------------------------------------------------------
+   Abstände & Layout-Hilfen
+   -------------------------------------------------------------------------- */
+.mt-section {
+    margin-top: 2rem;
+}
+
+.mb-section {
+    margin-bottom: 2rem;
+}
+
+.section-divider {
+    border-top: 1px solid #dee2e6;
+    margin: 2rem 0;
+}
+
+/* Alerts / Benachrichtigungen */
+.alert {
+    border-radius: 6px;
+    font-size: 0.92rem;
+    padding: 0.85rem 1.15rem;
+    border: 1px solid transparent;
+}
+
+.alert-info {
+    background-color: #e7f1ff;
+    border-color: #b6d4fe;
+    color: #084298;
+}
+
+.alert-success {
+    background-color: #d1e7dd;
+    border-color: #badbcc;
+    color: #0f5132;
+}
+
+.alert-warning {
+    background-color: #fff3cd;
+    border-color: #ffecb5;
+    color: #664d03;
+}
+
+.alert-danger {
+    background-color: #f8d7da;
+    border-color: #f5c2c7;
+    color: #842029;
+}
+
+/* --------------------------------------------------------------------------
+   Badges / Labels
+   -------------------------------------------------------------------------- */
+.badge {
+    font-weight: 500;
+    font-size: 0.78rem;
+    padding: 0.3em 0.65em;
+    border-radius: 4px;
+}
+
+.badge-punkte {
+    background-color: #0d6efd;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+.badge-befreit {
+    background-color: #198754;
+    color: #ffffff;
+}
+
+.badge-nicht-befreit {
+    background-color: #dc3545;
+    color: #ffffff;
+}
+
+/* --------------------------------------------------------------------------
+   Footer
+   -------------------------------------------------------------------------- */
+.footer {
+    font-size: 0.85rem;
+    border-top: 1px solid #dee2e6 !important;
+}
+
+.footer p {
+    line-height: 1.5;
+}
+
+/* --------------------------------------------------------------------------
+   Fehlerseiten
+   -------------------------------------------------------------------------- */
+.error-page {
+    text-align: center;
+    padding: 4rem 2rem;
+}
+
+.error-page .error-code {
+    font-size: 6rem;
+    font-weight: 700;
+    color: #dee2e6;
+    line-height: 1;
+    margin-bottom: 1rem;
+}
+
+.error-page .error-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 0.5rem;
+}
+
+.error-page .error-description {
+    font-size: 1rem;
+    color: #6c757d;
+    margin-bottom: 2rem;
+}
+
+/* --------------------------------------------------------------------------
+   Hilfsklassen für den Rechner
+   -------------------------------------------------------------------------- */
+.rechner-ergebnis {
+    background-color: #f8f9fa;
+    border: 2px solid #dee2e6;
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin-top: 1rem;
+}
+
+.rechner-ergebnis .punkte-summe {
+    font-size: 2.5rem;
+    font-weight: 700;
+}
+
+.rechner-ergebnis .punkte-label {
+    font-size: 0.9rem;
+    color: #6c757d;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.status-befreit {
+    color: #198754;
+}
+
+.status-nicht-befreit {
+    color: #dc3545;
+}
+
+/* --------------------------------------------------------------------------
+   Scrollbar-Styling (Webkit-basierte Browser)
+   -------------------------------------------------------------------------- */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f3f5;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #c1c9d2;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #a8b2bd;
+}
+
+/* --------------------------------------------------------------------------
+   Lesbarkeits-Optimierung für Daten-Tabellen
+   -------------------------------------------------------------------------- */
+.data-table-container {
+    overflow-x: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+}
+
+.data-table-container .table {
+    margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Tooltip-Anpassungen
+   -------------------------------------------------------------------------- */
+.tooltip {
+    font-size: 0.82rem;
+}
+
+/* --------------------------------------------------------------------------
+   Druck-Optimierung
+   -------------------------------------------------------------------------- */
+@media print {
+    .navbar,
+    .footer,
+    .btn,
+    .no-print {
+        display: none !important;
+    }
+
+    body {
+        background-color: #ffffff;
+    }
+
+    .card {
+        box-shadow: none;
+        border: 1px solid #dee2e6;
+    }
+}

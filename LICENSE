@@ -1,0 +1,63 @@
+MIT License
+
+Copyright (c) 2026 Felix Zhu
+
+Hiermit wird jeder Person, die eine Kopie dieser Software und der
+zugehörigen Dokumentationsdateien (die "Software") erhält, kostenlos
+die Erlaubnis erteilt, die Software uneingeschränkt zu nutzen,
+einschließlich und ohne Einschränkung der Rechte zur Nutzung, zum
+Kopieren, Ändern, Zusammenführen, Veröffentlichen, Verteilen,
+Unterlizenzieren und/oder Verkaufen von Kopien der Software, und
+Personen, denen die Software zur Verfügung gestellt wird, dies unter
+den folgenden Bedingungen zu gestatten:
+
+Der obige Urheberrechtsvermerk und dieser Genehmigungsvermerk sind
+in allen Kopien oder wesentlichen Teilen der Software beizulegen.
+
+DIE SOFTWARE WIRD OHNE MÄNGELGEWÄHR UND OHNE JEGLICHE AUSDRÜCKLICHE
+ODER STILLSCHWEIGENDE GEWÄHRLEISTUNG ZUR VERFÜGUNG GESTELLT,
+EINSCHLIESSLICH, ABER NICHT BESCHRÄNKT AUF DIE GEWÄHRLEISTUNG DER
+MARKTGÄNGIGKEIT, DER EIGNUNG FÜR EINEN BESTIMMTEN ZWECK UND DER
+NICHTVERLETZUNG VON RECHTEN DRITTER. DIE AUTOREN ODER
+URHEBERRECHTSINHABER SIND IN KEINEM FALL HAFTBAR FÜR ANSPRÜCHE,
+SCHÄDEN ODER ANDERE VERPFLICHTUNGEN, SEI ES AUS VERTRAG, UNERLAUBTER
+HANDLUNG ODER ANDERWEITIG, DIE SICH AUS ODER IN VERBINDUNG MIT DER
+SOFTWARE ODER DER NUTZUNG ODER ANDEREN GESCHÄFTEN MIT DER SOFTWARE
+ERGEBEN.
+
+---
+
+WICHTIGER HAFTUNGSAUSSCHLUSS — ADR-DATEN (DEUTSCH / ENGLISH)
+
+Deutsch:
+Diese Software enthält ADR-Gefahrgutdaten (UN-Nummern,
+Stoffbezeichnungen, Klassifizierungen, Verpackungsgruppen,
+Tunnelcodes etc.), die AUSSCHLIESSLICH REFERENZZWECKEN DIENEN.
+Die ADR-Daten wurden nach bestem Wissen und Gewissen aus
+öffentlich zugänglichen Quellen zusammengestellt, jedoch:
+
+  - Übernimmt der Autor KEINERLEI GEWÄHR für Richtigkeit,
+    Vollständigkeit oder Aktualität der Daten.
+  - Ist der Nutzer der Software ALLEIN VERANTWORTLICH für
+    die Überprüfung aller ADR-Daten vor deren Verwendung in
+    rechtsverbindlichen Transportdokumenten.
+  - Stellt diese Software KEINE RECHTSBERATUNG dar und
+    ersetzt NICHT die Konsultation der amtlichen ADR-Vorschriften.
+  - Haftet der Autor NICHT für Schäden oder Verluste, die
+    aus fehlerhaften oder unvollständigen ADR-Daten entstehen,
+    einschließlich, aber nicht beschränkt auf Bußgelder,
+    Transportverzögerungen oder Personenschäden.
+
+Vor Nutzung für rechtsverbindliche Zwecke sind die ADR-Daten
+zwingend mit den amtlichen ADR-Vorschriften (ECE/TRANS/300,
+Vol. I & II) in der jeweils gültigen Fassung abzugleichen.
+
+English:
+This software includes ADR dangerous goods data (UN numbers,
+proper shipping names, classifications, packing groups, tunnel
+codes, etc.) for REFERENCE PURPOSES ONLY. No warranty of accuracy.
+User bears sole responsibility for verification before any
+legally binding use. Not legal advice. See German text above
+for full disclaimer.
+
+---

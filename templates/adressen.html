@@ -1,0 +1,364 @@
+{% extends "base.html" %}
+
+{% block title %}Adressverwaltung — ADR 1000-Punkte-Rechner{% endblock %}
+
+{% block content %}
+<div class="row mt-3">
+    <div class="col-12">
+        <h1>
+            <i class="bi bi-geo-alt me-2"></i>
+            Adressverwaltung
+        </h1>
+        <p class="text-muted">
+            Verwalten Sie Ihre Versandadressen (Absender) für Gefahrguttransporte.
+        </p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>
+                    <i class="bi bi-list-ul me-2"></i>Versandadressen
+                    <span id="addressCount" class="badge bg-secondary ms-1">0</span>
+                </span>
+                <button id="addAddressBtn" class="btn btn-primary btn-sm">
+                    <i class="bi bi-plus-lg me-1"></i>Neue Adresse
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive data-table-container">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Name</th>
+                                <th>Straße</th>
+                                <th>PLZ</th>
+                                <th>Stadt</th>
+                                <th>Land</th>
+                                <th class="text-center">Standard</th>
+                                <th class="text-end">Aktionen</th>
+                            </tr>
+                        </thead>
+                        <tbody id="addressesTableBody">
+                            <tr id="noAddressesRow">
+                                <td colspan="7" class="text-center text-muted py-4">
+                                    <i class="bi bi-inbox" style="font-size: 2rem;"></i>
+                                    <p class="mt-2 mb-0">Keine Adressen vorhanden.</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Address Modal (Add/Edit) -->
+<div class="modal fade" id="addressModal" tabindex="-1" aria-labelledby="addressModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title" id="addressModalLabel">
+                    <i class="bi bi-plus-circle me-2"></i>Neue Adresse
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addressForm" novalidate>
+                    <input type="hidden" id="addressId" value="">
+                    <div class="row g-3">
+                        <div class="col-md-8">
+                            <label for="addrName" class="form-label">Name <span class="text-danger">*</span></label>
+                            <input type="text" id="addrName" class="form-control" required
+                                   placeholder="Firmenname oder Absendername">
+                            <div class="invalid-feedback">Der Name ist erforderlich.</div>
+                        </div>
+                        <div class="col-md-4 d-flex align-items-end">
+                            <div class="form-check">
+                                <input type="checkbox" id="addrIsDefault" class="form-check-input" value="1">
+                                <label for="addrIsDefault" class="form-check-label">
+                                    Als Standardadresse festlegen
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-8">
+                            <label for="addrStreet" class="form-label">Straße</label>
+                            <input type="text" id="addrStreet" class="form-control" placeholder="Straße und Hausnummer">
+                        </div>
+                        <div class="col-md-4">
+                            <label for="addrZip" class="form-label">PLZ</label>
+                            <input type="text" id="addrZip" class="form-control" placeholder="Postleitzahl">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="addrCity" class="form-label">Stadt</label>
+                            <input type="text" id="addrCity" class="form-control" placeholder="Stadt">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="addrCountry" class="form-label">Land</label>
+                            <input type="text" id="addrCountry" class="form-control" value="Deutschland" placeholder="Land">
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    <i class="bi bi-x-lg me-1"></i>Abbrechen
+                </button>
+                <button type="button" id="saveAddressBtn" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i>Speichern
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteAddressModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title">
+                    <i class="bi bi-exclamation-triangle me-2"></i>Löschen bestätigen
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p id="deleteAddressMessage">Möchten Sie diese Adresse wirklich löschen?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+                <button type="button" id="confirmDeleteAddressBtn" class="btn btn-danger">
+                    <i class="bi bi-trash me-1"></i>Löschen
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+/**
+ * Adressverwaltung — Inline JavaScript
+ * Simple CRUD for shipping addresses.
+ */
+let allAddresses = [];
+let deleteAddressId = null;
+
+const addressesTableBody     = document.getElementById('addressesTableBody');
+const addressCount           = document.getElementById('addressCount');
+const addAddressBtn          = document.getElementById('addAddressBtn');
+const addressModal           = new bootstrap.Modal(document.getElementById('addressModal'));
+const deleteAddressModal     = new bootstrap.Modal(document.getElementById('deleteAddressModal'));
+const addressModalLabel      = document.getElementById('addressModalLabel');
+const addressForm            = document.getElementById('addressForm');
+const addressIdInput         = document.getElementById('addressId');
+const saveAddressBtn         = document.getElementById('saveAddressBtn');
+const confirmDeleteAddressBtn = document.getElementById('confirmDeleteAddressBtn');
+const deleteAddressMessage   = document.getElementById('deleteAddressMessage');
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadAddresses();
+
+    addAddressBtn.addEventListener('click', () => openAddressModal(null));
+    saveAddressBtn.addEventListener('click', saveAddress);
+    confirmDeleteAddressBtn.addEventListener('click', executeDeleteAddress);
+
+    addressForm.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); saveAddress(); }
+    });
+});
+
+async function loadAddresses() {
+    try {
+        const resp = await fetch('/api/shipping-addresses');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        allAddresses = await resp.json();
+        renderAddresses();
+    } catch (err) {
+        console.error('Fehler beim Laden der Adressen:', err);
+        showToast('Fehler beim Laden der Adressen', 'danger');
+    }
+}
+
+function renderAddresses() {
+    addressCount.textContent = allAddresses.length;
+    addressesTableBody.innerHTML = '';
+
+    if (allAddresses.length === 0) {
+        const tr = document.createElement('tr');
+        tr.id = 'noAddressesRow';
+        tr.innerHTML = `
+            <td colspan="7" class="text-center text-muted py-4">
+                <i class="bi bi-inbox" style="font-size: 2rem;"></i>
+                <p class="mt-2 mb-0">Keine Adressen vorhanden.</p>
+            </td>`;
+        addressesTableBody.appendChild(tr);
+        return;
+    }
+
+    allAddresses.forEach(a => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td class="fw-semibold">${esc(a.name)}${a.is_default ? ' <span class="badge bg-success ms-1">Standard</span>' : ''}</td>
+            <td>${esc(a.street || '—')}</td>
+            <td>${esc(a.zip || '—')}</td>
+            <td>${esc(a.city || '—')}</td>
+            <td>${esc(a.country || 'Deutschland')}</td>
+            <td class="text-center">${a.is_default ? '<i class="bi bi-check-circle-fill text-success"></i>' : '<i class="bi bi-circle text-muted"></i>'}</td>
+            <td class="text-end text-nowrap">
+                <button class="btn btn-sm btn-outline-primary edit-addr-btn me-1" data-id="${a.id}" title="Bearbeiten">
+                    <i class="bi bi-pencil"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-danger delete-addr-btn" data-id="${a.id}" data-name="${esc(a.name)}" title="Löschen">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </td>`;
+        addressesTableBody.appendChild(tr);
+    });
+
+    document.querySelectorAll('.edit-addr-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const a = allAddresses.find(x => x.id === parseInt(btn.dataset.id));
+            if (a) openAddressModal(a);
+        });
+    });
+
+    document.querySelectorAll('.delete-addr-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            deleteAddressId = parseInt(btn.dataset.id);
+            deleteAddressMessage.textContent = `Möchten Sie die Adresse „${btn.dataset.name}” wirklich löschen?`;
+            deleteAddressModal.show();
+        });
+    });
+}
+
+function openAddressModal(address) {
+    addressForm.reset();
+    addressIdInput.value = '';
+    document.getElementById('addrIsDefault').checked = false;
+
+    if (address) {
+        addressModalLabel.innerHTML = '<i class="bi bi-pencil me-2"></i>Adresse bearbeiten';
+        addressIdInput.value = address.id;
+        document.getElementById('addrName').value = address.name || '';
+        document.getElementById('addrStreet').value = address.street || '';
+        document.getElementById('addrZip').value = address.zip || '';
+        document.getElementById('addrCity').value = address.city || '';
+        document.getElementById('addrCountry').value = address.country || 'Deutschland';
+        document.getElementById('addrIsDefault').checked = !!address.is_default;
+    } else {
+        addressModalLabel.innerHTML = '<i class="bi bi-plus-circle me-2"></i>Neue Adresse';
+        document.getElementById('addrCountry').value = 'Deutschland';
+    }
+
+    addressForm.querySelectorAll('.is-invalid').forEach(el => el.classList.remove('is-invalid'));
+    addressModal.show();
+}
+
+async function saveAddress() {
+    const nameInput = document.getElementById('addrName');
+    const name = nameInput.value.trim();
+    if (!name) {
+        nameInput.classList.add('is-invalid');
+        nameInput.focus();
+        return;
+    }
+    nameInput.classList.remove('is-invalid');
+
+    const id = addressIdInput.value;
+    const isEdit = !!id;
+
+    const data = {
+        name: name,
+        street: document.getElementById('addrStreet').value.trim(),
+        zip: document.getElementById('addrZip').value.trim(),
+        city: document.getElementById('addrCity').value.trim(),
+        country: document.getElementById('addrCountry').value.trim(),
+        is_default: document.getElementById('addrIsDefault').checked,
+    };
+
+    saveAddressBtn.disabled = true;
+    saveAddressBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Speichere...';
+
+    try {
+        const url = isEdit ? `/api/shipping-addresses/${id}` : '/api/shipping-addresses';
+        const method = isEdit ? 'PUT' : 'POST';
+
+        const resp = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || `HTTP ${resp.status}`);
+        }
+
+        addressModal.hide();
+        showToast(isEdit ? 'Adresse erfolgreich aktualisiert.' : 'Adresse erfolgreich angelegt.', 'success');
+        await loadAddresses();
+    } catch (err) {
+        console.error('Fehler beim Speichern:', err);
+        showToast(`Fehler: ${err.message}`, 'danger');
+    } finally {
+        saveAddressBtn.disabled = false;
+        saveAddressBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Speichern';
+    }
+}
+
+async function executeDeleteAddress() {
+    if (!deleteAddressId) return;
+
+    confirmDeleteAddressBtn.disabled = true;
+    confirmDeleteAddressBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Lösche...';
+
+    try {
+        const resp = await fetch(`/api/shipping-addresses/${deleteAddressId}`, { method: 'DELETE' });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || `HTTP ${resp.status}`);
+        }
+
+        deleteAddressModal.hide();
+        showToast('Adresse erfolgreich gelöscht.', 'success');
+        await loadAddresses();
+    } catch (err) {
+        console.error('Fehler beim Löschen:', err);
+        showToast(`Fehler: ${err.message}`, 'danger');
+    } finally {
+        confirmDeleteAddressBtn.disabled = false;
+        confirmDeleteAddressBtn.innerHTML = '<i class="bi bi-trash me-1"></i>Löschen';
+        deleteAddressId = null;
+    }
+}
+
+function esc(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function showToast(message, type) {
+    const container = document.querySelector('main .container') || document.body;
+    const existing = document.getElementById('liveToastAddr');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.id = 'liveToastAddr';
+    toast.className = `alert alert-${type} alert-dismissible fade show position-fixed top-0 start-50 translate-middle-x mt-3 shadow`;
+    toast.style.zIndex = '9999';
+    toast.style.minWidth = '300px';
+    toast.innerHTML = `${message}<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Schließen"></button>`;
+    container.appendChild(toast);
+
+    setTimeout(() => { if (toast.parentNode) toast.remove(); }, 4000);
+}
+</script>
+{% endblock %}
