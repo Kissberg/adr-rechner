@@ -183,6 +183,7 @@ def calculate():
 
     for item in items_in:
         un_number = str(item.get("un_number", "")).strip()
+        un_db_id = item.get("un_db_id")  # exact variant ID from the frontend dropdown
         quantity = float(item.get("quantity", 0))
         unit = str(item.get("unit", "kg")).strip()
         num_packages = int(item.get("num_packages", 1)) or 1
@@ -191,12 +192,21 @@ def calculate():
         if not un_number or quantity <= 0:
             continue
 
-        # Look up UN number in database
-        row = db.execute(
-            "SELECT un_number, substance_name_de, hazard_class, transport_category, "
-            "points_factor, packing_group FROM un_numbers WHERE un_number = ?",
-            (un_number,)
-        ).fetchone()
+        # Look up by exact DB id if provided (for multi-variant UN numbers),
+        # otherwise fall back to first match by UN number
+        if un_db_id:
+            row = db.execute(
+                "SELECT un_number, substance_name_de, hazard_class, transport_category, "
+                "points_factor, packing_group FROM un_numbers WHERE id = ?",
+                (un_db_id,)
+            ).fetchone()
+        if not (un_db_id and row):
+            row = db.execute(
+                "SELECT un_number, substance_name_de, hazard_class, transport_category, "
+                "points_factor, packing_group FROM un_numbers WHERE un_number = ? "
+                "ORDER BY id LIMIT 1",
+                (un_number,)
+            ).fetchone()
 
         if row is None:
             continue

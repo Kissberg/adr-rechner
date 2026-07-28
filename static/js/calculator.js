@@ -22,13 +22,22 @@ const resultStatus = document.getElementById('resultStatus');
 const submitFeedback = document.getElementById('submitFeedback');
 const customerSelect = document.getElementById('customerSelect');
 const addressSelect = document.getElementById('addressSelect');
-const unDatalist = document.getElementById('unDatalist');
+
+// ── Global: active custom dropdown ──────────────────────────────────────
+let activeDropdown = null;  // { wrapper, input, list, data }
 
 // ── Initialization ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     loadCustomers();
     loadShippingAddresses();
-    addRow();  // Start with one empty row
+    addRow();
+});
+
+// Close custom dropdown on outside click
+document.addEventListener('click', (e) => {
+    if (activeDropdown && !activeDropdown.wrapper.contains(e.target)) {
+        closeDropdown();
+    }
 });
 
 // ── Data Loading ───────────────────────────────────────────────────────
@@ -64,50 +73,100 @@ async function loadShippingAddresses() {
     }
 }
 
-// ── UN Search ──────────────────────────────────────────────────────────
+// ── UN Search with Custom Dropdown ──────────────────────────────────────
 let searchTimeout = null;
 
-async function searchUN(query, rowElement) {
-    if (!query || query.length < 1) return;
+async function searchUN(query, wrapper) {
+    if (!query || query.length < 1) {
+        closeDropdown();
+        return;
+    }
 
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(async () => {
         try {
             const resp = await fetch(`/api/un-search?q=${encodeURIComponent(query)}`);
             const data = await resp.json();
-            allUnData = data;
-
-            // Update datalist
-            unDatalist.innerHTML = '';
-            data.forEach(item => {
-                const option = document.createElement('option');
-                option.value = item.un_number;
-                option.textContent = `${item.un_number} — ${item.substance_name_de}`;
-                unDatalist.appendChild(option);
-            });
-
-            // Populate the row's datalist reference
-            const listId = `un-list-${rowElement.dataset.rowId}`;
-            let listEl = document.getElementById(listId);
-            if (!listEl) {
-                listEl = document.createElement('datalist');
-                listEl.id = listId;
-                rowElement.appendChild(listEl);
+            if (data.length === 0) {
+                closeDropdown();
+                return;
             }
-            listEl.innerHTML = '';
-            data.forEach(item => {
-                const option = document.createElement('option');
-                option.value = item.un_number;
-                option.textContent = `${item.un_number} — ${item.substance_name_de}`;
-                listEl.appendChild(option);
-            });
+            buildDropdown(wrapper, data);
         } catch (err) {
             console.error('Fehler bei UN-Suche:', err);
         }
     }, 200);
 }
 
-// ── Row Selection ──────────────────────────────────────────────────────
+function buildDropdown(wrapper, data) {
+    // Remove old dropdown if any
+    const oldList = wrapper.querySelector('.custom-un-dropdown');
+    if (oldList) oldList.remove();
+
+    const list = document.createElement('div');
+    list.className = 'custom-un-dropdown';
+    list.style.cssText = 'position:absolute;top:100%;left:0;right:0;z-index:1050;max-height:400px;overflow-y:auto;'
+        + 'background:#fff;border:1px solid #dee2e6;border-radius:0 0 6px 6px;box-shadow:0 8px 24px rgba(0,0,0,.12);';
+
+    data.forEach((item, idx) => {
+        const entry = document.createElement('div');
+        entry.className = 'un-dropdown-item';
+        entry.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;'
+            + 'line-height:1.4;';
+        if (idx === 0) entry.style.background = '#f8f9fa';
+
+        // Packing group badge
+        const pgBadge = item.packing_group
+            ? `<span class="badge bg-secondary me-1" style="font-size:0.7rem;">VG ${item.packing_group}</span>`
+            : '';
+        const catBadge = `<span class="badge bg-info me-1" style="font-size:0.7rem;">Kat. ${item.transport_category}</span>`;
+        const factorText = item.points_factor != null ? `×${item.points_factor}` : '';
+
+        entry.innerHTML = `
+            <div style="font-weight:600;color:#0d6efd;">UN ${item.un_number} ${pgBadge} ${catBadge} <small class="text-muted">${factorText}</small></div>
+            <div style="font-size:0.85rem;color:#333;word-wrap:break-word;white-space:normal;">${item.substance_name_de}</div>
+            <div style="font-size:0.75rem;color:#888;">Klasse ${item.hazard_class || '—'}</div>
+        `;
+
+        entry.addEventListener('mousedown', (e) => {
+            e.preventDefault(); // prevent blur before click
+            selectUNItem(wrapper, item);
+        });
+        entry.addEventListener('mouseenter', () => {
+            list.querySelectorAll('.un-dropdown-item').forEach(el => el.style.background = '');
+            entry.style.background = '#e9ecef';
+        });
+
+        list.appendChild(entry);
+    });
+
+    wrapper.appendChild(list);
+
+    // Track active dropdown
+    activeDropdown = { wrapper, input: wrapper.querySelector('.un-input'), list, data };
+}
+
+function selectUNItem(wrapper, item) {
+    const input = wrapper.querySelector('.un-input');
+    const rowElement = wrapper.closest('tr.item-row');
+
+    // Store the DB id for exact variant matching
+    input.value = item.un_number;
+    rowElement.dataset.unDbId = item.id;
+
+    fillRowFromUN(rowElement, item);
+    closeDropdown();
+    recalcAll();
+}
+
+function closeDropdown() {
+    if (!activeDropdown) return;
+    const list = activeDropdown.list;
+    if (list && list.parentNode) list.remove();
+    activeDropdown = null;
+}
+
+// ── Row Selection (fallback for manual input without dropdown) ──────────
 function onUNSelected(rowElement) {
     const input = rowElement.querySelector('.un-input');
     const unNumber = input.value.trim();
@@ -118,15 +177,23 @@ function onUNSelected(rowElement) {
         return;
     }
 
-    // Find the matching UN data (from all cached results, or try exact DB match)
-    let match = allUnData.find(d => d.un_number === unNumber);
+    // Try by DB id first, then by UN number
+    const dbId = rowElement.dataset.unDbId;
+    let match = null;
+    if (dbId) {
+        match = allUnData.find(d => String(d.id) === String(dbId));
+    }
     if (!match) {
-        // Exact match not in current results — clear and return
+        match = allUnData.find(d => d.un_number === unNumber);
+    }
+
+    if (!match) {
         clearRowFields(rowElement);
         recalcAll();
         return;
     }
 
+    rowElement.dataset.unDbId = match.id;
     fillRowFromUN(rowElement, match);
     recalcAll();
 }
@@ -143,7 +210,6 @@ function fillRowFromUN(rowElement, data) {
     catEl.textContent = data.transport_category !== null ? data.transport_category : '';
     factorEl.textContent = data.points_factor !== null ? data.points_factor : 0;
 
-    // Store data on the row
     rowElement.dataset.category = data.transport_category;
     rowElement.dataset.factor = data.points_factor;
 
@@ -158,6 +224,7 @@ function clearRowFields(rowElement) {
     rowElement.querySelector('.points-display').textContent = '0';
     rowElement.dataset.category = '';
     rowElement.dataset.factor = '';
+    rowElement.dataset.unDbId = '';
 }
 
 // ── Points Calculation ─────────────────────────────────────────────────
@@ -203,16 +270,15 @@ function createRowElement() {
     tr.dataset.rowId = rowId;
     tr.dataset.category = '';
     tr.dataset.factor = '';
+    tr.dataset.unDbId = '';
 
     tr.innerHTML = `
-        <td>
+        <td style="position:relative;">
             <input type="text" class="form-control form-control-sm un-input"
-                   list="un-list-${rowId}" placeholder="z.B. 1203"
-                   autocomplete="off">
-            <datalist id="un-list-${rowId}"></datalist>
+                   placeholder="z.B. 1203" autocomplete="off">
         </td>
         <td>
-            <span class="name-display d-block text-truncate" style="max-width:220px;" title="">—</span>
+            <span class="name-display d-block text-wrap" style="max-width:300px;word-wrap:break-word;white-space:normal;line-height:1.3;" title="">—</span>
         </td>
         <td>
             <span class="class-display">—</span>
@@ -263,18 +329,57 @@ function createRowElement() {
     `;
 
     // Event listeners
+    const unTd = tr.querySelector('td:first-child');
     const unInput = tr.querySelector('.un-input');
     const qtyInput = tr.querySelector('.qty-input');
     const deleteBtn = tr.querySelector('.delete-row-btn');
 
-    // UN number input — search on type
+    // UN number input — search on type, show custom dropdown
     unInput.addEventListener('input', () => {
-        searchUN(unInput.value, tr);
+        const val = unInput.value.trim();
+        if (val.length >= 1) {
+            searchUN(val, unTd);
+        } else {
+            closeDropdown();
+        }
     });
 
-    // UN number selected (change event)
+    // UN number selected via Enter/Tab (fallback if dropdown not used)
     unInput.addEventListener('change', () => {
+        closeDropdown();
         onUNSelected(tr);
+    });
+
+    // Keyboard navigation in dropdown
+    unInput.addEventListener('keydown', (e) => {
+        const list = unTd.querySelector('.custom-un-dropdown');
+        if (!list || list.children.length === 0) return;
+
+        const items = list.querySelectorAll('.un-dropdown-item');
+        let activeIdx = -1;
+        items.forEach((el, i) => { if (el.style.background) activeIdx = i; });
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            const next = Math.min(activeIdx + 1, items.length - 1);
+            items.forEach(el => el.style.background = '');
+            items[next].style.background = '#e9ecef';
+            items[next].scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            const prev = Math.max(activeIdx - 1, 0);
+            items.forEach(el => el.style.background = '');
+            items[prev].style.background = '#e9ecef';
+            items[prev].scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (activeIdx >= 0) {
+                const data = allUnData[activeIdx];
+                if (data) selectUNItem(unTd, data);
+            }
+        } else if (e.key === 'Escape') {
+            closeDropdown();
+        }
     });
 
     // Quantity change
@@ -309,14 +414,10 @@ addRowBtn.addEventListener('click', addRow);
 
 // ── Form Submission ────────────────────────────────────────────────────
 submitBtn.addEventListener('click', async () => {
-    // Clear previous feedback
     submitFeedback.style.display = 'none';
     submitFeedback.innerHTML = '';
 
-    // Validate form
     const errors = [];
-
-    // Check items
     const itemRows = tbody.querySelectorAll('tr.item-row');
     if (itemRows.length === 0) {
         errors.push('Mindestens eine Gefahrgutposition ist erforderlich.');
@@ -337,6 +438,7 @@ submitBtn.addEventListener('click', async () => {
         const numPackages = parseInt(pkgNumInput.value) || 1;
         const packageType = pkgTypeSelect.value;
         const name = nameEl.textContent.trim();
+        const dbId = row.dataset.unDbId;
 
         if (!unNumber) {
             errors.push('UN-Nummer ist für alle Positionen erforderlich.');
@@ -359,6 +461,7 @@ submitBtn.addEventListener('click', async () => {
         if (unNumber && name && name !== '—' && quantity > 0) {
             items.push({
                 un_number: unNumber,
+                un_db_id: dbId || null,
                 quantity: quantity,
                 unit: unit,
                 num_packages: numPackages,
@@ -367,7 +470,6 @@ submitBtn.addEventListener('click', async () => {
         }
     });
 
-    // Check customer
     const customerId = customerSelect.value;
     if (!customerId) {
         errors.push('Bitte wählen Sie einen Kunden aus.');
@@ -376,7 +478,6 @@ submitBtn.addEventListener('click', async () => {
         customerSelect.classList.remove('is-invalid');
     }
 
-    // Check shipping address
     const addressId = addressSelect.value;
     if (!addressId) {
         errors.push('Bitte wählen Sie eine Versandadresse aus.');
@@ -390,7 +491,6 @@ submitBtn.addEventListener('click', async () => {
         return;
     }
 
-    // Submit
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Berechne...';
 
@@ -412,7 +512,6 @@ submitBtn.addEventListener('click', async () => {
             return;
         }
 
-        // Update result display
         resultPoints.textContent = result.total_points;
         if (result.is_exempt) {
             resultStatus.innerHTML = '<span class="badge bg-success fs-6 px-3 py-2">Freigestellt nach ADR 1.1.3.6</span>'
@@ -428,7 +527,6 @@ submitBtn.addEventListener('click', async () => {
              `Status: ${result.is_exempt ? 'Freigestellt (ADR 1.1.3.6)' : 'Nicht freigestellt'}`,
              `${result.items.length} Position(en) berechnet.`]);
 
-        // Redirect to transport document after short delay
         setTimeout(() => {
             window.location.href = `/befoerderungspapier/${result.shipment_id}`;
         }, 2000);
