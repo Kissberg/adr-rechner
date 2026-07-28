@@ -145,12 +145,15 @@ def init_db() -> None:
     conn.close()
 
 
+
 def seed_un_numbers() -> int:
     """
-    Populate the un_numbers table with common dangerous goods.
+    Populate the un_numbers table with all dangerous goods from ADR 2025 Table A.
+    Loads data from the JSON seed file (extracted from official ADR 2025 PDF, Band I).
     Returns the number of UN numbers inserted.
-    All data based on ADR 2025 Table A and ADR 1.1.3.6 transport categories.
     """
+    import json
+
     conn = get_db()
     cursor = conn.cursor()
 
@@ -159,415 +162,37 @@ def seed_un_numbers() -> int:
 
     # ── Transport Category → Points Factor mapping ──
     FACTOR = {0: 0, 1: 50, 2: 3, 3: 1, 4: None}  # 4 = unlimited, no 1000-point limit
+    # ── max quantity per transport unit (ADR 1.1.3.6.3) ──
+    MAX_QTY = {0: 0, 1: 20, 2: 333, 3: 1000, 4: None}
 
-    # Each entry: (un_number, name_de, name_en, hazard_class, packing_group,
-    #              transport_category, tunnel_code, special_provisions, max_qty)
-    # max_quantity_per_transport in kg or L (ADR 1.1.3.6.3 table upper limits)
-    un_data = [
-        # ═══ Category 1 (factor 50) ════════════════════════════════════
-        # Toxic & corrosive gases (T, TC, TO, TFC, TOC)
-        ("1005", "Ammoniak, wasserfrei", "Ammonia, anhydrous",
-         "2.3", None, 1, "(C/D)", "23, 653", 50),
-        ("1017", "Chlor", "Chlorine",
-         "2.3", None, 1, "(C/D)", "23, 653", 50),
-        ("1040", "Ethylenoxid mit Stickstoff", "Ethylene oxide with nitrogen",
-         "2.3", None, 1, "(C/D)", "653", 50),
-        ("1067", "Stickstoffdioxid", "Dinitrogen tetroxide / Nitrogen dioxide",
-         "2.3", None, 1, "(C/D)", "23", 50),
-        ("1076", "Phosgen", "Phosgene",
-         "2.3", None, 1, "(C/D)", "23, 653", 50),
+    # Load seed data from JSON
+    seed_path = os.path.join(DB_DIR, "adr_2025_seed.json")
+    if not os.path.exists(seed_path):
+        print(f"WARNING: ADR seed file not found: {seed_path}")
+        conn.close()
+        return 0
 
-        # Desensitized explosives (Class 4.1 with special provisions)
-        ("1310", "Ammoniumpikrat, angefeuchtet", "Ammonium picrate, wetted",
-         "4.1", "I", 1, "(B)", "23, 653", 20),
-        ("1320", "Dinitrophenol, angefeuchtet", "Dinitrophenol, wetted",
-         "4.1", "I", 1, "(B)", "23", 20),
-        ("1321", "Dinitrophenolate, angefeuchtet", "Dinitrophenolates, wetted",
-         "4.1", "I", 1, "(B)", "23", 20),
-        ("1322", "Dinitroresorcin, angefeuchtet", "Dinitroresorcinol, wetted",
-         "4.1", "I", 1, "(B)", "23", 20),
-        ("1344", "Trinitrophenol (Pikrinsäure), angefeuchtet", "Trinitrophenol, wetted",
-         "4.1", "I", 1, "(B)", "23", 20),
-        ("1517", "Zirkoniumpikramat, angefeuchtet", "Zirconium picramate, wetted",
-         "4.1", "I", 1, "(B)", "23", 20),
-        ("1571", "Bariumazid, angefeuchtet", "Barium azide, wetted",
-         "4.1", "I", 1, "(B)", "23", 20),
-        ("2555", "Nitrocellulose mit Wasser (min. 25%)", "Nitrocellulose with water",
-         "4.1", "II", 1, "(B)", "23", 20),
-        ("2556", "Nitrocellulose mit Alkohol (min. 25%)", "Nitrocellulose with alcohol",
-         "4.1", "II", 1, "(B)", "23", 20),
-        ("2557", "Nitrocellulose-Gemisch (min. 25%)", "Nitrocellulose mixture",
-         "4.1", "II", 1, "(B)", "23", 20),
-        ("2852", "Dipicrylsulfid, angefeuchtet", "Dipicryl sulphide, wetted",
-         "4.1", "I", 1, "(B)", "23", 20),
-        ("3317", "2-Amino-4,6-dinitrophenol, angefeuchtet", "2-Amino-4,6-dinitrophenol, wetted",
-         "4.1", "I", 1, "(B)", "23", 20),
-
-        # Organic peroxides Type B
-        ("3101", "Organisches Peroxid Typ B, flüssig", "Organic peroxide type B, liquid",
-         "5.2", None, 1, "(B)", "122, 653", 20),
-        ("3102", "Organisches Peroxid Typ B, fest", "Organic peroxide type B, solid",
-         "5.2", None, 1, "(B)", "122, 653", 20),
-        ("3111", "Organisches Peroxid Typ B, flüssig, temperaturgeregelt",
-         "Organic peroxide type B, liquid, temperature controlled",
-         "5.2", None, 1, "(B)", "122, 653", 20),
-        ("3112", "Organisches Peroxid Typ B, fest, temperaturgeregelt",
-         "Organic peroxide type B, solid, temperature controlled",
-         "5.2", None, 1, "(B)", "122, 653", 20),
-
-        # ═══ Category 2 (factor 3) ══════════════════════════════════════
-        # Flammable gases
-        ("1001", "Acetylen, gelöst", "Acetylene, dissolved",
-         "2.1", None, 2, "(B/D)", "653", 333),
-        ("1010", "Butadiene, stabilisiert", "Butadienes, stabilized",
-         "2.1", None, 2, "(B/D)", "653", 333),
-        ("1011", "Butan", "Butane",
-         "2.1", None, 2, "(B/D)", "653", 333),
-        ("1020", "Chlorpentafluorethan (R115)", "Chloropentafluoroethane",
-         "2.2", None, 3, "(C/E)", "653", 1000),  # Non-flammable, non-toxic
-        # UN 1046 Helium is Class 2.2 (non-flammable, non-toxic) — Cat 3
-        # Listed once below in Category 3 section
-
-        # PG I flammable liquids
-        ("1093", "Acrylnitril, stabilisiert", "Acrylonitrile, stabilized",
-         "3", "I", 2, "(C/D)", "653, 802", 333),
-        ("1993", "Entzündbarer flüssiger Stoff, n.a.g. (VG I)",
-         "Flammable liquid, n.o.s. (PG I)",
-         "3", "I", 2, "(C/D)", "274, 653", 333),
-
-        # Class 4.2 PG I  (pyrophoric / self-heating)
-        ("1363", "Kopra", "Copra",
-         "4.2", "III", 3, "(C/E)", "653", None),  # PG III → Cat 3
-
-        # Class 5.1 PG I
-        ("1479", "Oxidierender fester Stoff, n.a.g.", "Oxidizing solid, n.o.s.",
-         "5.1", "I", 2, "(B)", "274, 653", 50),
-        ("1486", "Kaliumnitrat", "Potassium nitrate",
-         "5.1", "III", 3, "(E)", None, None),
-
-        # Class 6.1 PG I (toxic by inhalation)
-        ("1092", "Acrolein, stabilisiert", "Acrolein, stabilized",
-         "6.1", "I", 2, "(C/D)", "653, 802", 50),
-        ("1098", "Allylalkohol", "Allyl alcohol",
-         "6.1", "I", 2, "(C/D)", "653, 802", 50),
-        ("1143", "Crotonaldehyd, stabilisiert", "Crotonaldehyde, stabilized",
-         "6.1", "I", 2, "(C/D)", "653, 802", 50),
-        ("1185", "Ethylenimin, stabilisiert", "Ethyleneimine, stabilized",
-         "6.1", "I", 2, "(C/D)", "653, 802", 50),
-        ("1238", "Methylchlorformiat", "Methyl chloroformate",
-         "6.1", "I", 2, "(C/D)", "653", 50),
-        ("1541", "Acetoncyanhydrin, stabilisiert", "Acetone cyanohydrin, stabilized",
-         "6.1", "I", 2, "(C/D)", "653, 802", 50),
-
-        # Class 8 PG I
-        ("1789", "Salzsäure (VG I)", "Hydrochloric acid (PG I)",
-         "8", "I", 2, "(C/D)", "653", 50),
-        ("1796", "Nitriersäure, Gemisch (VG I)", "Nitrating acid, mixture (PG I)",
-         "8", "I", 2, "(C/D)", "653", 50),
-        ("1826", "Nitriersäure, verbraucht (VG I)", "Nitrating acid, spent (PG I)",
-         "8", "I", 2, "(C/D)", "653", 50),
-        ("2031", "Salpetersäure (ausgenommen rotrauchend) über 70%",
-         "Nitric acid, other than red fuming, >70%",
-         "8", "I", 2, "(C/D)", "653", 50),
-
-        # Lithium batteries
-        ("3480", "Lithium-Ionen-Batterien", "Lithium ion batteries",
-         "9", "II", 2, "(E)", "188, 230, 310, 376, 377, 636", 333),
-        ("3481", "Lithium-Ionen-Batterien in Ausrüstung",
-         "Lithium ion batteries contained in equipment",
-         "9", "II", 2, "(E)", "188, 230, 310, 376, 377, 636", 333),
-        ("3090", "Lithium-Metall-Batterien", "Lithium metal batteries",
-         "9", "II", 2, "(E)", "188, 230, 310, 376, 377, 636", 333),
-        ("3091", "Lithium-Metall-Batterien in Ausrüstung",
-         "Lithium metal batteries contained in equipment",
-         "9", "II", 2, "(E)", "188, 230, 310, 376, 377, 636", 333),
-        ("3490", "Lithium-Ionen-Batterien (beschädigt/defekt)",
-         "Lithium ion batteries (damaged/defective)",
-         "9", "II", 2, "(E)", "376, 377", 333),
-        ("3491", "Natrium-Ionen-Batterien",
-         "Sodium ion batteries",
-         "9", "II", 2, "(E)", "188, 230, 310, 376, 377, 636", 333),
-
-        # ═══ Category 3 (factor 1) — Workhorse category ═══════════════
-        # Non-flammable, non-toxic gases (group A, O)
-        ("1002", "Luft, verdichtet", "Air, compressed",
-         "2.2", None, 3, "(E)", "653", 1000),
-        ("1006", "Argon, verdichtet", "Argon, compressed",
-         "2.2", None, 3, "(E)", "653", 1000),
-        ("1013", "Kohlendioxid", "Carbon dioxide",
-         "2.2", None, 3, "(C/E)", "653", 1000),
-        ("1046", "Helium, verdichtet (Verdrängungsgas)",
-         "Helium, compressed",
-         "2.2", None, 3, "(E)", "653", 1000),
-        ("1056", "Krypton, verdichtet", "Krypton, compressed",
-         "2.2", None, 3, "(E)", "653", 1000),
-        ("1066", "Stickstoff, verdichtet", "Nitrogen, compressed",
-         "2.2", None, 3, "(E)", "653", 1000),
-        ("1072", "Sauerstoff, verdichtet", "Oxygen, compressed",
-         "2.2", None, 3, "(E)", "653", 1000),  # Oxidizing gas → Cat 3
-        ("1950", "Druckgaspackungen (Aerosole), nicht entzündbar",
-         "Aerosols, non-flammable",
-         "2.2", None, 3, "(E)", "190, 327, 344, 625", 1000),
-        ("1977", "Stickstoff, tiefgekühlt, flüssig", "Nitrogen, refrigerated liquid",
-         "2.2", None, 3, "(E)", "653", 1000),
-        ("2187", "Kohlendioxid, tiefgekühlt, flüssig", "Carbon dioxide, refrigerated liquid",
-         "2.2", None, 3, "(C/E)", "653", 1000),
-        ("3159", "1,1,1,2-Tetrafluorethan (R134a)", "1,1,1,2-Tetrafluoroethane",
-         "2.2", None, 3, "(C/E)", "653", 1000),
-
-        # Aerosols — non-flammable (only flammable aerosols in group A → Cat 2)
-        ("1950", "Druckgaspackungen, entzündbar", "Aerosols, flammable",
-         "2.1", None, 3, "(B/D)", "190, 327, 344, 625", 333),
-
-        # Flammable liquids PG II
-        ("1090", "Aceton", "Acetone",
-         "3", "II", 3, "(D/E)", None, 333),
-        ("1114", "Benzol", "Benzene",
-         "3", "II", 3, "(D/E)", "653", 333),
-        ("1120", "Butanole", "Butanols",
-         "3", "II", 3, "(D/E)", None, 333),
-        ("1133", "Klebstoffe, entzündbare Flüssigkeit enthaltend",
-         "Adhesives, containing flammable liquid",
-         "3", "II", 3, "(D/E)", "640D", 333),
-        ("1169", "Extrakte, aromatisch, flüssig", "Extracts, aromatic, liquid",
-         "3", "II", 3, "(D/E)", "653", 333),
-        ("1170", "Ethanol (Ethylalkohol)", "Ethanol (Ethyl alcohol)",
-         "3", "II", 3, "(D/E)", None, 333),
-        ("1202", "Dieselkraftstoff", "Diesel fuel",
-         "3", "III", 3, "(D/E)", "640K", 1000),
-        ("1203", "Benzin (Ottokraftstoff)", "Motor spirit / Gasoline",
-         "3", "II", 3, "(D/E)", "653", 333),
-        ("1219", "Isopropanol (Isopropylalkohol)", "Isopropanol (Isopropyl alcohol)",
-         "3", "II", 3, "(D/E)", None, 333),
-        ("1230", "Methanol", "Methanol",
-         "3", "II", 3, "(D/E)", "653", 333),
-        ("1263", "Farbe (einschließlich Farbverdünnung)", "Paint (including paint thinner)",
-         "3", "II", 3, "(D/E)", "163, 640D", 333),
-        ("1267", "Erdöl, roh", "Petroleum crude oil",
-         "3", "II", 3, "(D/E)", "653", 333),
-        ("1268", "Erdöldestillate, n.a.g.", "Petroleum distillates, n.o.s.",
-         "3", "II", 3, "(D/E)", "640D", 333),
-        ("1294", "Toluol", "Toluene",
-         "3", "II", 3, "(D/E)", None, 333),
-        ("1863", "Turbinenkraftstoff (Kerosin)", "Fuel, aviation, turbine engine",
-         "3", "II", 3, "(D/E)", "640K", 333),
-        ("1993", "Entzündbarer flüssiger Stoff, n.a.g. (VG II/III)",
-         "Flammable liquid, n.o.s. (PG II/III)",
-         "3", "II", 3, "(D/E)", "274, 640D", 333),
-
-        # PG III flammable liquids
-        ("1202", "Dieselkraftstoff (Heizöl)", "Diesel fuel / Heating oil",
-         "3", "III", 3, "(D/E)", "640K", 1000),
-        ("1223", "Petroleum (Kerosin)", "Kerosene",
-         "3", "III", 3, "(D/E)", "640K", 1000),
-        ("1999", "Teere, flüssig", "Tars, liquid",
-         "3", "III", 3, "(D/E)", "653", 1000),
-
-        # Flammable solids (Class 4.1)
-        ("1325", "Entzündbarer fester Stoff, n.a.g.", "Flammable solid, organic, n.o.s.",
-         "4.1", "II", 3, "(D/E)", "274", 333),
-        ("1334", "Naphthalin, roh", "Naphthalene, crude",
-         "4.1", "III", 3, "(D/E)", "653", 1000),
-        ("1941", "Dibromdifluormethan", "Dibromodifluoromethane",
-         "9", "III", 3, "(E)", "653", None),
-        ("3175", "Feste Stoffe, die entzündbare flüssige Stoffe enthalten",
-         "Solids containing flammable liquid, n.o.s.",
-         "4.1", "II", 3, "(D/E)", "216, 274", 333),
-
-        # Pyrophoric / self-heating (Class 4.2) PG II/III
-        ("1361", "Kohle, tierischen oder pflanzlichen Ursprungs", "Carbon, animal or vegetable origin",
-         "4.2", "II", 3, "(D/E)", "653", 333),
-        ("1362", "Kohle, aktiviert", "Carbon, activated",
-         "4.2", "III", 3, "(E)", "653", None),
-        ("1364", "Baumwollabfälle, ölig", "Cotton waste, oily",
-         "4.2", "III", 3, "(E)", None, None),
-        ("1376", "Eisenoxid, verbraucht", "Iron oxide, spent",
-         "4.2", "III", 3, "(E)", "653", None),
-        ("1386", "Ölkuchen", "Seed cake",
-         "4.2", "III", 3, "(E)", "653", None),
-        ("3088", "Selbstzersetzlicher fester Stoff, n.a.g.",
-         "Self-reactive solid, n.o.s.",
-         "4.2", "II", 3, "(D/E)", "274", 333),
-
-        # Dangerous when wet (Class 4.3) PG II/III
-        ("1400", "Barium", "Barium",
-         "4.3", "II", 3, "(D/E)", "653", 333),
-        ("1428", "Natrium", "Sodium",
-         "4.3", "I", 2, "(D/E)", "653", 50),  # PG I → Cat 2
-        ("2257", "Kalium", "Potassium",
-         "4.3", "I", 2, "(D/E)", "653", 50),  # PG I → Cat 2
-        ("3170", "Aluminiumschmelze", "Aluminium smelting by-products",
-         "4.3", "II", 3, "(D/E)", "244", 333),
-
-        # Oxidizers (Class 5.1) PG II/III
-        ("1479", "Oxidierender fester Stoff, n.a.g. (VG II)", "Oxidizing solid, n.o.s. (PG II)",
-         "5.1", "II", 3, "(D/E)", "274", 333),
-        ("1490", "Kaliumpermanganat", "Potassium permanganate",
-         "5.1", "II", 3, "(D/E)", "653", 333),
-        ("1495", "Natriumchlorat", "Sodium chlorate",
-         "5.1", "II", 3, "(D/E)", "653", 333),
-        ("1505", "Natriumpersulfat", "Sodium persulphate",
-         "5.1", "III", 3, "(E)", "653", None),
-        ("1942", "Ammoniumnitrat (weniger gefährlich)", "Ammonium nitrate (less hazardous)",
-         "5.1", "III", 3, "(E)", "653", None),
-        ("2067", "Ammoniumnitrat-Düngemittel", "Ammonium nitrate based fertilizer",
-         "5.1", "III", 3, "(D/E)", "186, 653", 1000),
-        ("2468", "Trichlorisocyanursäure, trocken", "Trichloroisocyanuric acid, dry",
-         "5.1", "II", 3, "(D/E)", None, 333),
-        ("3212", "Hypochlorite, anorganisch, n.a.g.", "Hypochlorites, inorganic, n.o.s.",
-         "5.1", "II", 3, "(D/E)", "274", 333),
-
-        # Toxic substances (Class 6.1) PG II/III
-        ("1544", "Alkaloide, fest, n.a.g.", "Alkaloids, solid, n.o.s.",
-         "6.1", "II", 3, "(D/E)", "274, 802", 333),
-        ("1547", "Anilin", "Aniline",
-         "6.1", "II", 3, "(D/E)", "802", 333),
-        ("1888", "Chloroform", "Chloroform",
-         "6.1", "III", 3, "(E)", None, None),
-        ("2020", "Chlorphenole, fest", "Chlorophenols, solid",
-         "6.1", "III", 3, "(E)", "653", None),
-        ("2076", "Kresole, flüssig", "Cresols, liquid",
-         "6.1", "II", 3, "(D/E)", None, 333),
-        ("2811", "Giftiger fester organischer Stoff, n.a.g.",
-         "Toxic solid, organic, n.o.s.",
-         "6.1", "II", 3, "(D/E)", "274, 802", 333),
-
-        # Corrosive substances (Class 8) PG II/III
-        ("1719", "Ätzender alkalischer flüssiger Stoff, n.a.g.",
-         "Caustic alkali liquid, n.o.s.",
-         "8", "II", 3, "(D/E)", "274", 333),
-        ("1789", "Salzsäure (VG II/III)", "Hydrochloric acid (PG II/III)",
-         "8", "II", 3, "(D/E)", None, 333),
-        ("1805", "Phosphorsäure, flüssig", "Phosphoric acid, solution",
-         "8", "III", 3, "(E)", None, None),
-        ("1823", "Natriumhydroxid, fest (Ätznatron)", "Sodium hydroxide, solid",
-         "8", "II", 3, "(D/E)", None, 333),
-        ("1824", "Natronlauge (Natriumhydroxid-Lösung)", "Sodium hydroxide solution",
-         "8", "II", 3, "(D/E)", None, 333),
-        ("1830", "Schwefelsäure, über 51%", "Sulphuric acid, >51%",
-         "8", "II", 3, "(D/E)", None, 333),
-        ("2031", "Salpetersäure (außer rotrauchend) bis 70%",
-         "Nitric acid, other than red fuming, ≤70%",
-         "8", "II", 3, "(D/E)", None, 333),
-        ("2491", "Ethanolamin", "Ethanolamine",
-         "8", "III", 3, "(E)", None, None),
-        ("2582", "Eisen(III)-chlorid, Lösung", "Ferric chloride, solution",
-         "8", "III", 3, "(E)", None, None),
-        ("2586", "Alkylsulfonsäuren, flüssig", "Alkylsulphonic acids, liquid",
-         "8", "III", 3, "(E)", "653", None),
-        ("2794", "Batterien, nass, mit Säure gefüllt",
-         "Batteries, wet, filled with acid",
-         "8", None, 3, "(E)", "295", None),
-        ("2795", "Batterien, nass, mit Alkali gefüllt",
-         "Batteries, wet, filled with alkali",
-         "8", None, 3, "(E)", "295", None),
-        ("3264", "Ätzender saurer anorganischer flüssiger Stoff, n.a.g.",
-         "Corrosive liquid, acidic, inorganic, n.o.s.",
-         "8", "II", 3, "(D/E)", "274", 333),
-        ("3265", "Ätzender saurer organischer flüssiger Stoff, n.a.g.",
-         "Corrosive liquid, acidic, organic, n.o.s.",
-         "8", "II", 3, "(D/E)", "274", 333),
-        ("3266", "Ätzender alkalischer anorganischer flüssiger Stoff, n.a.g.",
-         "Corrosive liquid, basic, inorganic, n.o.s.",
-         "8", "II", 3, "(D/E)", "274", 333),
-
-        # Miscellaneous (Class 9)
-        ("1845", "Kohlendioxid, fest (Trockeneis)", "Carbon dioxide, solid (Dry ice)",
-         "9", "III", 3, "(E)", "653", 200),
-        ("2212", "Asbest, blau (Krokydolith)", "Asbestos, blue (crocidolite)",
-         "9", "II", 3, "(E)", "168, 653", 333),
-        ("2590", "Asbest, weiß (Chrysotil)", "Asbestos, white (chrysotile)",
-         "9", "III", 3, "(E)", "168, 653", None),
-        ("2807", "Magnetisierte Stoffe", "Magnetized material",
-         "9", "III", 3, "(E)", None, None),
-        ("3077", "Umweltgefährdender Stoff, fest, n.a.g.",
-         "Environmentally hazardous substance, solid, n.o.s.",
-         "9", "III", 3, "(E)", "274, 375, 653", None),
-        ("3082", "Umweltgefährdender Stoff, flüssig, n.a.g.",
-         "Environmentally hazardous substance, liquid, n.o.s.",
-         "9", "III", 3, "(E)", "274, 375, 653", None),
-        ("3166", "Fahrzeug mit Verbrennungsmotor", "Vehicle, internal combustion engine",
-         "9", None, 3, "(E)", "388", None),
-        ("3171", "Batteriebetriebenes Fahrzeug", "Battery-powered vehicle",
-         "9", None, 3, "(E)", "388", None),
-        ("3245", "Gentechnisch veränderte Mikroorganismen",
-         "Genetically modified micro-organisms",
-         "9", None, 3, "(E)", "219, 653", None),
-        ("3268", "Airbag-Gasgeneratoren", "Air bag inflators",
-         "9", "III", 3, "(E)", "280, 289, 653", None),
-        ("3363", "Gefährliche Güter in Maschinen oder Geräten",
-         "Dangerous goods in machinery or apparatus",
-         "9", None, 3, "(E)", "301, 653", None),
-
-        # ═══ Category 4 (unlimited — no 1000-point limit) ═══════════
-        ("1327", "Heu, Stroh oder Bhusa", "Hay, straw or bhusa",
-         "4.1", None, 4, "(E)", None, None),
-        ("2796", "Batteriesäure (Schwefelsäure, bis 51%)",
-         "Battery fluid, acid (sulphuric acid ≤51%)",
-         "8", "II", 4, "(E)", None, None),
-        ("2800", "Batterien, nass, auslaufsicher",
-         "Batteries, wet, non-spillable",
-         "8", None, 4, "(E)", "238, 295", None),
-        ("3166", "Verbrennungsmotor (innerhalb Maschine)",
-         "Engine, internal combustion",
-         "9", None, 4, "(E)", "388", None),
-        ("3334", "Flüssiger Stoff, für die Luftfahrt geregelt, n.a.g.",
-         "Aviation regulated liquid, n.o.s.",
-         "9", None, 4, "(E)", "653", None),
-        ("3335", "Fester Stoff, für die Luftfahrt geregelt, n.a.g.",
-         "Aviation regulated solid, n.o.s.",
-         "9", None, 4, "(E)", "653", None),
-        ("3508", "Kondensator, asymmetrisch (EDLC ≤20 Wh)",
-         "Capacitor, asymmetric (EDLC ≤20 Wh)",
-         "9", None, 4, "(E)", "372, 653", None),
-        ("3509", "Verpackungen, entsorgt, leer, ungereinigt",
-         "Packagings, discarded, empty, uncleaned",
-         "9", None, 4, "(E)", "653", None),
-
-        # ═══ Category 0 (factor 0) — exempt ════════════════════════════
-        # Class 7 excepted packages
-        ("2908", "Radioaktiver Stoff, freigestelltes Versandstück — leere Verpackung",
-         "Radioactive material, excepted package — empty packaging",
-         "7", None, 0, "(E)", "290, 369", 0),
-        ("2909", "Radioaktiver Stoff, freigestelltes Versandstück — hergestellte Gegenstände",
-         "Radioactive material, excepted package — manufactured articles",
-         "7", None, 0, "(E)", "290, 369", 0),
-        ("2910", "Radioaktiver Stoff, freigestelltes Versandstück — begrenzte Stoffmenge",
-         "Radioactive material, excepted package — limited quantity of material",
-         "7", None, 0, "(E)", "290, 369", 0),
-        ("2911", "Radioaktiver Stoff, freigestelltes Versandstück — Instrumente/Gegenstände",
-         "Radioactive material, excepted package — instruments/articles",
-         "7", None, 0, "(E)", "290, 369", 0),
-
-        # Radioactive, LSA / SCO
-        ("2912", "Radioaktiver Stoff, geringe spezifische Aktivität (LSA-I)",
-         "Radioactive material, low specific activity (LSA-I)",
-         "7", None, 0, "(E)", "172, 325, 326, 369", 0),
-        ("2913", "Radioaktiver Stoff, oberflächenkontaminierter Gegenstand (SCO-I/II)",
-         "Radioactive material, surface contaminated objects (SCO-I/II)",
-         "7", None, 0, "(E)", "172, 325, 326, 369", 0),
-        ("2915", "Radioaktiver Stoff, Versandstück Typ A",
-         "Radioactive material, Type A package",
-         "7", None, 0, "(E)", "172, 325, 326, 369", 0),
-    ]
-
-    # Deduplicate — keep only first occurrence per UN number
-    seen = set()
-    deduped = []
-    for row in un_data:
-        key = row[0]  # un_number is unique per ADR Table A
-        if key not in seen:
-            seen.add(key)
-            deduped.append(row)
+    with open(seed_path, "r", encoding="utf-8") as f:
+        raw_entries = json.load(f)
 
     now = datetime.now().isoformat()
-
+    seen = set()
     inserted = 0
-    for row in deduped:
-        un_number, name_de, name_en, hazard_class, packing_group, \
-            transport_category, tunnel_code, special_provisions, max_qty = row
-        danger_label = hazard_class  # danger label number (hazard diamond label)
-        points_factor = FACTOR[transport_category]
+
+    for e in raw_entries:
+        un = e.get("un_number", "").strip()
+        if not un or un in seen:
+            continue
+        seen.add(un)
+
+        name_de = (e.get("substance_name_de") or "").strip()[:200]
+        hc = e.get("hazard_class") or None
+        pg = e.get("packing_group") or None
+        tc = e.get("transport_category", 3)
+        tunnel = e.get("tunnel_code") or None
+        mq = MAX_QTY.get(tc)
+        danger_label = hc
+        points_factor = FACTOR[tc]
 
         cursor.execute(
             """INSERT INTO un_numbers
@@ -576,15 +201,16 @@ def seed_un_numbers() -> int:
                 special_provisions, points_factor, max_quantity_per_transport,
                 adr_version, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ADR 2025', ?)""",
-            (un_number, name_de, name_en, hazard_class, danger_label,
-             packing_group, transport_category, tunnel_code, special_provisions,
-             points_factor, max_qty, now)
+            (un, name_de, "", hc, danger_label,
+             pg, tc, tunnel, None,
+             points_factor, mq, now)
         )
         inserted += 1
 
     conn.commit()
     conn.close()
     return inserted
+
 
 
 def seed_shipping_addresses() -> int:
