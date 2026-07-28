@@ -259,7 +259,7 @@ def generate_befoerderungspapier(shipment_id):
         fontName="Helvetica-Bold",
         fontSize=18,
         alignment=TA_CENTER,
-        spaceAfter=2,
+        spaceAfter=12,
     )
     subtitle_style = ParagraphStyle(
         "ADR_Subtitle",
@@ -449,7 +449,10 @@ def generate_befoerderungspapier(shipment_id):
     story.append(Spacer(1, 0.4 * cm))
 
     # ── 3e. Total quantity summary ─────────────────────────────────────
-    total_qty = sum(float(it["quantity"] or 0) for it in items)
+    total_qty = sum(
+        float(it["quantity"] or 0) * int(it["num_packages"] or 1)
+        for it in items
+    )
     # Collect unique units
     units = set((it["unit"] or "").strip() for it in items)
     unit_summary = " / ".join(sorted(u for u in units if u))
