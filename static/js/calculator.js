@@ -103,10 +103,15 @@ function buildDropdown(wrapper, data) {
     const oldList = wrapper.querySelector('.custom-un-dropdown');
     if (oldList) oldList.remove();
 
+    const input = wrapper.querySelector('.un-input');
+    const inputRect = input.getBoundingClientRect();
+
     const list = document.createElement('div');
     list.className = 'custom-un-dropdown';
-    list.style.cssText = 'position:absolute;top:100%;left:0;right:0;z-index:1050;max-height:400px;overflow-y:auto;'
-        + 'background:#fff;border:1px solid #dee2e6;border-radius:0 0 6px 6px;box-shadow:0 8px 24px rgba(0,0,0,.12);';
+    // Use fixed positioning to escape table overflow clipping
+    list.style.cssText = 'position:fixed;z-index:9999;max-height:400px;overflow-y:auto;'
+        + 'background:#fff;border:1px solid #dee2e6;border-radius:0 0 6px 6px;box-shadow:0 8px 24px rgba(0,0,0,.15);'
+        + `top:${inputRect.bottom}px;left:${inputRect.left}px;width:${Math.max(inputRect.width, 380)}px;`;
 
     data.forEach((item, idx) => {
         const entry = document.createElement('div');
@@ -153,6 +158,7 @@ function selectUNItem(wrapper, item) {
     // Store the DB id for exact variant matching
     input.value = item.un_number;
     rowElement.dataset.unDbId = item.id;
+    rowElement.dataset.lastUnValue = item.un_number;
 
     fillRowFromUN(rowElement, item);
     closeDropdown();
@@ -170,6 +176,12 @@ function closeDropdown() {
 function onUNSelected(rowElement) {
     const input = rowElement.querySelector('.un-input');
     const unNumber = input.value.trim();
+
+    // If nothing changed and row already has data, don't re-evaluate
+    if (unNumber === rowElement.dataset.lastUnValue && rowElement.dataset.unDbId) {
+        return;
+    }
+    rowElement.dataset.lastUnValue = unNumber;
 
     if (!unNumber) {
         clearRowFields(rowElement);
@@ -273,7 +285,7 @@ function createRowElement() {
     tr.dataset.unDbId = '';
 
     tr.innerHTML = `
-        <td style="position:relative;">
+        <td>
             <input type="text" class="form-control form-control-sm un-input"
                    placeholder="z.B. 1203" autocomplete="off">
         </td>

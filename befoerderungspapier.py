@@ -199,8 +199,9 @@ def generate_befoerderungspapier(shipment_id):
         db.close()
         raise ValueError(f"Sendung mit ID {shipment_id} nicht gefunden.")
 
-    # Join with un_numbers to get authoritative ADR data:
-    #   hazard_class, packing_group, tunnel_code, official substance name
+    # Join with un_numbers to get authoritative ADR data.
+    # Use a subquery to pick ONE variant per UN number (lowest id first),
+    # since multiple packing group variants now exist for many UN numbers.
     items = db.execute(
         "SELECT si.*, "
         "un.hazard_class AS un_hazard_class, "
@@ -208,7 +209,11 @@ def generate_befoerderungspapier(shipment_id):
         "un.tunnel_code, "
         "un.substance_name_de AS un_substance_name "
         "FROM shipment_items si "
-        "LEFT JOIN un_numbers un ON si.un_number = un.un_number "
+        "LEFT JOIN ("
+        "  SELECT un_number, hazard_class, packing_group, tunnel_code, substance_name_de, "
+        "         ROW_NUMBER() OVER (PARTITION BY un_number ORDER BY id) AS rn "
+        "  FROM un_numbers"
+        ") un ON si.un_number = un.un_number AND un.rn = 1 "
         "WHERE si.shipment_id = ? "
         "ORDER BY si.id",
         (shipment_id,),
