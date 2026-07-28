@@ -242,9 +242,11 @@ function clearRowFields(rowElement) {
 // ── Points Calculation ─────────────────────────────────────────────────
 function calcRowPoints(rowElement) {
     const qtyInput = rowElement.querySelector('.qty-input');
+    const pkgNumInput = rowElement.querySelector('.pkg-num-input');
     const factor = parseFloat(rowElement.dataset.factor) || 0;
     const quantity = parseFloat(qtyInput.value) || 0;
-    const points = Math.round(quantity * factor * 100) / 100;
+    const numPackages = parseInt(pkgNumInput.value) || 1;
+    const points = Math.round(quantity * numPackages * factor * 100) / 100;
     rowElement.querySelector('.points-display').textContent = points;
     return points;
 }
@@ -396,6 +398,13 @@ function createRowElement() {
 
     // Quantity change
     qtyInput.addEventListener('input', () => {
+        calcRowPoints(tr);
+        recalcAll();
+    });
+
+    // Package count change — also triggers recalculation
+    const pkgNumInput = tr.querySelector('.pkg-num-input');
+    pkgNumInput.addEventListener('input', () => {
         calcRowPoints(tr);
         recalcAll();
     });

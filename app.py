@@ -218,7 +218,9 @@ def calculate():
         if category == 4:
             factor = 0.0
 
-        item_points = round(quantity * factor, 2)
+        # Total quantity = Menge pro Verpackung × Anzahl Verpackungen
+        total_quantity = quantity * num_packages
+        item_points = round(total_quantity * factor, 2)
         total_points += item_points
 
         calculated_items.append({
