@@ -42,7 +42,7 @@ def init_db() -> None:
         -- UN numbers database (Table A of ADR Chapter 3.2)
         CREATE TABLE IF NOT EXISTS un_numbers (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            un_number       VARCHAR(10) UNIQUE NOT NULL,
+            un_number       VARCHAR(10) NOT NULL,
             substance_name_de VARCHAR(200),
             substance_name_en VARCHAR(200),
             hazard_class    VARCHAR(10),
@@ -176,14 +176,12 @@ def seed_un_numbers() -> int:
         raw_entries = json.load(f)
 
     now = datetime.now().isoformat()
-    seen = set()
     inserted = 0
 
     for e in raw_entries:
         un = e.get("un_number", "").strip()
-        if not un or un in seen:
+        if not un:
             continue
-        seen.add(un)
 
         name_de = (e.get("substance_name_de") or "").strip()[:200]
         hc = e.get("hazard_class") or None
