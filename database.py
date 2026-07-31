@@ -101,6 +101,7 @@ def init_db() -> None:
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             shipment_id         INTEGER REFERENCES shipments(id),
             un_number           VARCHAR(10),
+            un_db_id            INTEGER REFERENCES un_numbers(id),
             substance_name      VARCHAR(200),
             quantity            DECIMAL(10,3),
             unit                VARCHAR(10),
@@ -138,6 +139,10 @@ def init_db() -> None:
         pass
     try:
         cursor.execute("ALTER TABLE shipment_items ADD COLUMN package_type VARCHAR(50) DEFAULT 'Verpackung'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE shipment_items ADD COLUMN un_db_id INTEGER")
     except sqlite3.OperationalError:
         pass
 

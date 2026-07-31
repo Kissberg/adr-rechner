@@ -200,8 +200,8 @@ def generate_befoerderungspapier(shipment_id):
         raise ValueError(f"Sendung mit ID {shipment_id} nicht gefunden.")
 
     # Join with un_numbers to get authoritative ADR data.
-    # Use a subquery to pick ONE variant per UN number (lowest id first),
-    # since multiple packing group variants now exist for many UN numbers.
+    # Use un_db_id for exact variant match (previously ROW_NUMBER() hack
+    # always picked the first variant, causing wrong VG on Beförderungspapier).
     items = db.execute(
         "SELECT si.*, "
         "un.hazard_class AS un_hazard_class, "
@@ -209,11 +209,7 @@ def generate_befoerderungspapier(shipment_id):
         "un.tunnel_code, "
         "un.substance_name_de AS un_substance_name "
         "FROM shipment_items si "
-        "LEFT JOIN ("
-        "  SELECT un_number, hazard_class, packing_group, tunnel_code, substance_name_de, "
-        "         ROW_NUMBER() OVER (PARTITION BY un_number ORDER BY id) AS rn "
-        "  FROM un_numbers"
-        ") un ON si.un_number = un.un_number AND un.rn = 1 "
+        "LEFT JOIN un_numbers un ON si.un_db_id = un.id "
         "WHERE si.shipment_id = ? "
         "ORDER BY si.id",
         (shipment_id,),
@@ -399,6 +395,9 @@ def generate_befoerderungspapier(shipment_id):
         # Tunnel code
         tunnel = (item["tunnel_code"] or "").strip()
 
+        # Item points (Punktzahl)
+        item_pts = float(item["item_points"] or 0)
+
         # Build the item line
         parts = [
             un_part,
@@ -412,6 +411,8 @@ def generate_befoerderungspapier(shipment_id):
 
         if tunnel:
             item_line += f" {tunnel}"
+
+        item_line += f"  —  {_format_quantity(item_pts)} Punkte"
 
         story.append(Paragraph(item_line, item_style))
 
@@ -459,6 +460,13 @@ def generate_befoerderungspapier(shipment_id):
     story.append(
         Paragraph(
             f"Gesamtmenge gefährlicher Güter: {_format_quantity(total_qty)} {unit_summary}",
+            total_style,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"Gesamtpunktzahl: {_format_quantity(total_points)} Punkte"
+            + (f"  (≤ 1000 → freigestellt nach 1.1.3.6)" if is_exempt else f"  (> 1000 → nicht freigestellt)"),
             total_style,
         )
     )

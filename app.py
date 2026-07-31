@@ -225,6 +225,7 @@ def calculate():
 
         calculated_items.append({
             "un_number": row["un_number"],
+            "un_db_id": un_db_id if un_db_id else None,
             "substance_name": row["substance_name_de"],
             "quantity": quantity,
             "unit": unit,
@@ -259,11 +260,11 @@ def calculate():
 
     for ci in calculated_items:
         cursor.execute(
-            "INSERT INTO shipment_items (shipment_id, un_number, substance_name, "
+            "INSERT INTO shipment_items (shipment_id, un_number, un_db_id, substance_name, "
             "quantity, unit, transport_category, points_factor, item_points, "
             "num_packages, package_type) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (shipment_id, ci["un_number"], ci["substance_name"],
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (shipment_id, ci["un_number"], ci["un_db_id"], ci["substance_name"],
              ci["quantity"], ci["unit"], ci["category"], ci["factor"], ci["points"],
              ci["num_packages"], ci["package_type"])
         )
