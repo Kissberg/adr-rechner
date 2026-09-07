@@ -6,8 +6,12 @@ __pycache__/
 *.db
 data/adr.db
 data/*.db
+data/_test_bp.pdf
 exports/
 adr_exports/
+.pytest_cache/
+.coverage
+htmlcov/
 *.tar
 .DS_Store
 .vscode/

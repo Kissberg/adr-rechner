@@ -344,10 +344,9 @@ function displayImportResult(result) {
 
 // ── Utilities ──────────────────────────────────────────────────────────
 function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    if (text === null || text === undefined) return '';
+    const map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+    return String(text).replace(/[&<>"']/g, function (c) { return map[c]; });
 }
 
 function showToast(message, type) {

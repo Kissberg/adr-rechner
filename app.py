@@ -4,6 +4,7 @@ Gefahrgut-Transportberechnung nach ADR 1.1.3.6 (1000-Punkte-Regel)
 """
 
 import os
+import sys
 
 from flask import (
     Flask,
@@ -14,43 +15,125 @@ from flask import (
     url_for,
     abort,
     send_file,
+    session,
 )
-from database import get_db, init_db, seed_un_numbers
+from database import get_db, init_db, seed_un_numbers, next_doc_number
 from befoerderungspapier import generate_befoerderungspapier
 from adr_import import parse_adr_pdf, import_adr_data, get_version_history
+from adr_rules import (
+    evaluate_transport,
+    TRANSPORT_FORM_LABELS,
+    VALID_TRANSPORT_FORMS,
+    TRANSPORT_FORM_PACKAGE,
+)
+import audit
+from auth import (
+    auth_bp, auth_enabled, current_user, ensure_default_admin,
+    login_required, role_required, ROLE_ADMIN, ROLE_USER,
+)
 
 app = Flask(__name__)
+
+# ── Obergrenze für Uploads (50 MB). Verhindert Speicher-/CPU-Erschöpfung
+#    beim Einlesen fremder PDF- oder Excel-Dateien.
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "50")) * 1024 * 1024
+
 app.config.update(
     # Deutsch-spezifische Einstellungen
     JSON_SORT_KEYS=False,
     JSON_AS_ASCII=False,
     # Flask-spezifische Einstellungen
-    SECRET_KEY="adr-1000-punkte-rechner-geheim",  # In Produktion Umgebungsvariable verwenden
-    DEBUG=True,
+    SECRET_KEY=os.environ.get("SECRET_KEY") or os.urandom(32).hex(),
+    DEBUG=False,
+    TESTING=False,
+    MAX_CONTENT_LENGTH=MAX_UPLOAD_BYTES,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    # SESSION_COOKIE_SECURE wird gesetzt, sobald TLS aktiv ist (siehe unten)
+    SESSION_COOKIE_SECURE=os.environ.get("PREFER_SECURE_COOKIE", "0") == "1",
 )
+
+app.register_blueprint(auth_bp)
 
 # ----------------------------------------------------------------
 # Datenbank-Initialisierung beim ersten Start
 # ----------------------------------------------------------------
 with app.app_context():
     init_db()
-    # SQLite WAL-Modus für gleichzeitige Zugriffe (13 Standorte)
+    ensure_default_admin()
     db = get_db()
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA synchronous=NORMAL")
-    db.execute("PRAGMA busy_timeout=5000")
     count = db.execute("SELECT COUNT(*) FROM un_numbers").fetchone()[0]
     db.close()
     if count == 0:
         seed_un_numbers()
 
+if os.environ.get("SECRET_KEY") is None:
+    print(
+        "[warn] SECRET_KEY ist nicht gesetzt — es wird ein zufälliger "
+        "Sitzungsschlüssel erzeugt. Nach jedem Neustart werden alle "
+        "Anmeldungen ungültig. Bitte SECRET_KEY in der Umgebung setzen.",
+        file=sys.stderr,
+    )
+
+
+# ----------------------------------------------------------------
+# Zugriffsschutz für alle Routen (außer Anmeldung, Statik, Healthcheck)
+# ----------------------------------------------------------------
+PUBLIC_ENDPOINTS = {"auth.login", "auth.logout", "static", "healthz"}
+
+
+@app.before_request
+def _require_login():
+    """Erzwingt die Anmeldung für alle geschützten Routen."""
+    if not auth_enabled():
+        return None
+    if request.endpoint in PUBLIC_ENDPOINTS:
+        return None
+    if current_user() is not None:
+        return None
+
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Nicht angemeldet"}), 401
+    return redirect(url_for("auth.login", next=request.full_path))
+
+
+@app.context_processor
+def _inject_user():
+    """Stellt Benutzer- und Versionsdaten in allen Templates bereit."""
+    return {
+        "current_user": current_user(),
+        "app_version": APP_VERSION,
+        "auth_enabled": auth_enabled(),
+    }
+
 
 # ----------------------------------------------------------------
 # Hilfsfunktionen
 # ----------------------------------------------------------------
+APP_VERSION = "2.0.0"
+
+
 def get_db_conn():
     """Wrapper für den Datenbankzugriff."""
     return get_db()
+
+
+@app.route("/healthz")
+def healthz():
+    """Healthcheck für Container-Orchestrierung (kein Login erforderlich)."""
+    db = get_db()
+    try:
+        db.execute("SELECT 1").fetchone()
+        un_count = db.execute("SELECT COUNT(*) FROM un_numbers").fetchone()[0]
+    except Exception as exc:  # pragma: no cover
+        return jsonify({"status": "error", "detail": str(exc)}), 503
+    finally:
+        db.close()
+    return jsonify({
+        "status": "ok",
+        "version": APP_VERSION,
+        "un_numbers": un_count,
+    })
 
 
 # ----------------------------------------------------------------
@@ -148,20 +231,28 @@ def adr_import_page():
 # ----------------------------------------------------------------
 
 @app.route("/calculate", methods=["POST"])
+@login_required
 def calculate():
-    """API-Endpunkt für die 1000-Punkte-Berechnung.
+    """API-Endpunkt für die vollständige ADR-1.1.3.6-Prüfung.
 
-    Erwartet JSON-Daten mit:
-        - items: Liste von {un_number, quantity, unit}
-        - customer_id: int
-        - shipping_address_id: int
-
-    Antwort:
+    Erwartet JSON:
         {
-            "total_points": 123.45,
-            "is_exempt": true/false,
-            "items": [{un_number, substance_name, quantity, unit, category, factor, points}],
-            "shipment_id": 1
+          "items": [{un_number, quantity, unit, num_packages, package_type,
+                     un_db_id?}],
+          "transport_form": "package" | "tank" | "bulk",
+          "customer_id": int,            // nur bei mode="save"
+          "shipping_address_id": int,    // nur bei mode="save"
+          "mode": "preview" | "save"     // Standard: "preview"
+        }
+
+    Antwort (Auszug):
+        {
+          "total_points": 123.45,
+          "is_exempt": false,
+          "blocking_reasons": [...],
+          "warnings": [...],
+          "items": [...],
+          "shipment_id": 1 | null
         }
     """
     data = request.get_json(force=True, silent=True)
@@ -169,115 +260,344 @@ def calculate():
         return jsonify({"error": "Keine gültigen JSON-Daten erhalten"}), 400
 
     items_in = data.get("items", [])
-    customer_id = data.get("customer_id")
-    shipping_address_id = data.get("shipping_address_id")
-
     if not items_in or not isinstance(items_in, list):
         return jsonify({"error": "Keine Gefahrgutpositionen angegeben"}), 400
-    if not customer_id or not shipping_address_id:
-        return jsonify({"error": "Kunde und Versandadresse sind erforderlich"}), 400
+    if len(items_in) > 200:
+        return jsonify({"error": "Maximal 200 Positionen je Sendung"}), 400
+
+    transport_form = str(data.get("transport_form", TRANSPORT_FORM_PACKAGE)).strip()
+    if transport_form not in VALID_TRANSPORT_FORMS:
+        return jsonify({
+            "error": f"Ungültige Beförderungsart. Erlaubt: "
+                     f"{', '.join(sorted(VALID_TRANSPORT_FORMS))}"
+        }), 400
+
+    mode = str(data.get("mode", "preview")).strip().lower()
+    if mode not in ("preview", "save"):
+        return jsonify({"error": "Ungültiger Modus (preview|save)"}), 400
 
     db = get_db()
-    calculated_items = []
-    total_points = 0.0
+    resolved = []
 
-    for item in items_in:
-        un_number = str(item.get("un_number", "")).strip()
-        un_db_id = item.get("un_db_id")  # exact variant ID from the frontend dropdown
-        quantity = float(item.get("quantity", 0))
-        unit = str(item.get("unit", "kg")).strip()
-        num_packages = int(item.get("num_packages", 1)) or 1
-        package_type = str(item.get("package_type", "")).strip()
+    try:
+        for idx, item in enumerate(items_in, start=1):
+            if not isinstance(item, dict):
+                return jsonify({"error": f"Position {idx} ist ungültig"}), 400
 
-        if not un_number or quantity <= 0:
-            continue
+            un_number = str(item.get("un_number", "")).strip()
+            un_db_id = item.get("un_db_id")
 
-        # Look up by exact DB id if provided (for multi-variant UN numbers),
-        # otherwise fall back to first match by UN number
-        if un_db_id:
-            row = db.execute(
-                "SELECT un_number, substance_name_de, hazard_class, transport_category, "
-                "points_factor, packing_group FROM un_numbers WHERE id = ?",
-                (un_db_id,)
-            ).fetchone()
-        if not (un_db_id and row):
-            row = db.execute(
-                "SELECT un_number, substance_name_de, hazard_class, transport_category, "
-                "points_factor, packing_group FROM un_numbers WHERE un_number = ? "
-                "ORDER BY id LIMIT 1",
-                (un_number,)
-            ).fetchone()
+            # ── Mengenvalidierung (ersetzt das bisherige blinde float()) ──
+            try:
+                quantity = float(item.get("quantity", 0))
+            except (TypeError, ValueError):
+                return jsonify({
+                    "error": f"Position {idx} (UN {un_number or '?'}): "
+                             f"Ungültige Menge."
+                }), 400
+            try:
+                num_packages = int(item.get("num_packages", 1) or 1)
+            except (TypeError, ValueError):
+                return jsonify({
+                    "error": f"Position {idx} (UN {un_number or '?'}): "
+                             f"Ungültige Anzahl Packstücke."
+                }), 400
 
-        if row is None:
-            continue
+            if quantity <= 0:
+                return jsonify({
+                    "error": f"Position {idx} (UN {un_number or '?'}): "
+                             f"Die Menge muss größer als 0 sein."
+                }), 400
+            if num_packages < 1:
+                return jsonify({
+                    "error": f"Position {idx} (UN {un_number or '?'}): "
+                             f"Die Anzahl Packstücke muss mindestens 1 sein."
+                }), 400
 
-        factor = float(row["points_factor"]) if row["points_factor"] is not None else 0.0
-        category = row["transport_category"]
+            if not un_number:
+                return jsonify({"error": f"Position {idx}: UN-Nummer fehlt"}), 400
+            if not (un_number.isdigit() and len(un_number) == 4):
+                return jsonify({
+                    "error": f"Position {idx}: '{un_number}' ist keine gültige "
+                             f"UN-Nummer (vier Ziffern erwartet)."
+                }), 400
 
-        # Category 4 = unlimited → factor is treated as 0 for 1000-point rule
-        if category == 4:
-            factor = 0.0
+            # ── Datensatzauflösung ──
+            if un_db_id:
+                row = db.execute(
+                    "SELECT id, un_number, substance_name_de, hazard_class, "
+                    "transport_category, points_factor, packing_group, "
+                    "max_quantity_per_transport FROM un_numbers WHERE id = ?",
+                    (un_db_id,)
+                ).fetchone()
+            else:
+                row = None
 
-        # Total quantity = Menge pro Verpackung × Anzahl Verpackungen
-        total_quantity = quantity * num_packages
-        item_points = round(total_quantity * factor, 2)
-        total_points += item_points
+            if row is None:
+                rows = db.execute(
+                    "SELECT id, un_number, substance_name_de, hazard_class, "
+                    "transport_category, points_factor, packing_group, "
+                    "max_quantity_per_transport FROM un_numbers "
+                    "WHERE un_number = ? ORDER BY id",
+                    (un_number,)
+                ).fetchall()
+                if not rows:
+                    return jsonify({
+                        "error": f"Position {idx}: UN {un_number} ist in der "
+                                 f"Datenbank nicht vorhanden."
+                    }), 400
+                row = rows[0]
+                # Mehrere Verpackungsgruppen-Varianten → Auswahl erzwingen.
+                # Ohne eindeutige Variante ist keine rechtsverbindliche
+                # Prüfung möglich (Fail-Safe).
+                if len(rows) > 1:
+                    variants = ", ".join(
+                        f"VG {(r['packing_group'] or '–')}" for r in rows
+                    )
+                    resolved.append({
+                        "un_number": un_number,
+                        "un_db_id": None,
+                        "substance_name": row["substance_name_de"],
+                        "hazard_class": row["hazard_class"],
+                        "transport_category": None,
+                        "points_factor": None,
+                        "packing_group": None,
+                        "max_quantity_per_transport": None,
+                        "quantity": quantity,
+                        "unit": str(item.get("unit", "kg") or "kg").strip(),
+                        "num_packages": num_packages,
+                        "package_type": str(item.get("package_type", "Verpackung")
+                                            or "Verpackung").strip(),
+                        "variant_required": True,
+                        "variants": variants,
+                    })
+                    continue
 
-        calculated_items.append({
-            "un_number": row["un_number"],
-            "un_db_id": un_db_id if un_db_id else None,
-            "substance_name": row["substance_name_de"],
-            "quantity": quantity,
-            "unit": unit,
-            "category": category,
-            "factor": factor,
-            "points": item_points,
-            "num_packages": num_packages,
-            "package_type": package_type,
-        })
+            resolved.append({
+                "un_number": row["un_number"],
+                "un_db_id": row["id"],
+                "substance_name": row["substance_name_de"],
+                "hazard_class": row["hazard_class"],
+                "transport_category": row["transport_category"],
+                "points_factor": row["points_factor"],
+                "packing_group": row["packing_group"],
+                "max_quantity_per_transport": row["max_quantity_per_transport"],
+                "quantity": quantity,
+                "unit": str(item.get("unit", "kg") or "kg").strip(),
+                "num_packages": num_packages,
+                "package_type": str(item.get("package_type", "Verpackung")
+                                    or "Verpackung").strip(),
+                "variant_required": False,
+                "variants": "",
+            })
+    finally:
+        pass
 
-    total_points = round(total_points, 2)
-    is_exempt = total_points <= 1000
+    # ── Regelengine: vollständige 1.1.3.6-Prüfung ──
+    try:
+        result = evaluate_transport(resolved, transport_form=transport_form)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
-    # Save to shipments and shipment_items tables
-    cursor = db.cursor()
+    # Positionen, bei denen die Variante noch gewählt werden muss
+    for raw, ev in zip(resolved, result.items):
+        if raw.get("variant_required"):
+            ev.transport_category = None
+            ev.factor = 0.0
+            ev.points = 0.0
+            ev.notes.append(
+                f"UN {raw['un_number']} besitzt mehrere Varianten "
+                f"({raw['variants']}). Bitte die zutreffende "
+                f"Verpackungsgruppe auswählen."
+            )
+            result.blocking_reasons.append(
+                f"UN {raw['un_number']}: Variante (Verpackungsgruppe) nicht "
+                f"ausgewählt — keine rechtsverbindliche Prüfung möglich."
+            )
 
-    # Determine ADR version — use requested version or latest imported version
-    adr_version = data.get("adr_version", "").strip()
-    if not adr_version:
-        # Use the latest imported ADR version, fallback to 'ADR 2025'
-        latest = db.execute(
-            "SELECT version FROM adr_versions ORDER BY import_date DESC LIMIT 1"
-        ).fetchone()
-        adr_version = latest["version"] if latest else "ADR 2025"
-
-    cursor.execute(
-        "INSERT INTO shipments (customer_id, shipping_address_id, total_points, is_exempt, adr_version) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (customer_id, shipping_address_id, total_points, is_exempt, adr_version)
+    result.is_exempt = (
+        result.transport_form == TRANSPORT_FORM_PACKAGE
+        and not result.blocking_reasons
+        and result.total_points <= 1000
     )
-    shipment_id = cursor.lastrowid
 
-    for ci in calculated_items:
+    # ── Persistenz nur im Modus "save" ──
+    shipment_id = None
+    if mode == "save":
+        customer_id = data.get("customer_id")
+        shipping_address_id = data.get("shipping_address_id")
+        if not customer_id or not shipping_address_id:
+            db.close()
+            return jsonify({
+                "error": "Zum Speichern sind Kunde und Versandadresse erforderlich."
+            }), 400
+
+        adr_version = str(data.get("adr_version", "")).strip()
+        if not adr_version:
+            latest = db.execute(
+                "SELECT version FROM adr_versions ORDER BY import_date DESC LIMIT 1"
+            ).fetchone()
+            adr_version = latest["version"] if latest else "ADR 2025"
+
+        user = current_user()
+        doc_number = next_doc_number(db)
+
+        cursor = db.cursor()
         cursor.execute(
-            "INSERT INTO shipment_items (shipment_id, un_number, un_db_id, substance_name, "
-            "quantity, unit, transport_category, points_factor, item_points, "
-            "num_packages, package_type) "
+            "INSERT INTO shipments (customer_id, shipping_address_id, total_points, "
+            "is_exempt, adr_version, doc_number, transport_form, "
+            "exemption_reasons, warnings, created_by, notes) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (shipment_id, ci["un_number"], ci["un_db_id"], ci["substance_name"],
-             ci["quantity"], ci["unit"], ci["category"], ci["factor"], ci["points"],
-             ci["num_packages"], ci["package_type"])
+            (
+                customer_id, shipping_address_id, result.total_points,
+                int(result.is_exempt), adr_version, doc_number, transport_form,
+                "\n".join(result.blocking_reasons),
+                "\n".join(result.warnings),
+                (user or {}).get("username"),
+                str(data.get("notes", "") or "")[:1000],
+            )
+        )
+        shipment_id = cursor.lastrowid
+
+        for ev in result.items:
+            cursor.execute(
+                "INSERT INTO shipment_items (shipment_id, un_number, un_db_id, "
+                "substance_name, quantity, unit, transport_category, points_factor, "
+                "item_points, num_packages, package_type, hazard_class, "
+                "total_quantity, limit_exceeded, class_excluded) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (shipment_id, ev.un_number, ev.un_db_id, ev.substance_name,
+                 ev.quantity, ev.unit, ev.transport_category, ev.factor, ev.points,
+                 ev.num_packages, ev.package_type, ev.hazard_class,
+                 ev.total_quantity, int(ev.limit_exceeded), int(ev.class_excluded))
+            )
+
+        db.commit()
+
+        audit.log(
+            audit.CALCULATE, "shipment", shipment_id,
+            f"Sendung {doc_number}: {result.total_points:g} Punkte, "
+            f"freigestellt={result.is_exempt}, Form={transport_form}"
         )
 
+    db.close()
+
+    payload = result.to_dict()
+    payload["shipment_id"] = shipment_id
+    payload["transport_form_label"] = TRANSPORT_FORM_LABELS.get(
+        transport_form, transport_form)
+    if shipment_id:
+        payload["redirect"] = url_for("view_transport_document", id=shipment_id)
+    return jsonify(payload)
+
+
+# ── Sendungsverwaltung (Verlauf / Archiv) ────────────────────────────────
+
+@app.route("/sendungen")
+@login_required
+def shipments_page():
+    """Sendungsverlauf — Liste aller gespeicherten Sendungen."""
+    return render_template("sendungen.html", title="Sendungsverlauf")
+
+
+@app.route("/api/shipments")
+@login_required
+def api_shipments():
+    """Paginierte Sendungsliste mit Suchfunktion.
+
+    Parameter: ?q=Suchbegriff (Dokumentnummer, UN-Nummer, Kunde)
+               ?page=1&per_page=25
+    """
+    q = request.args.get("q", "").strip()
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+        per_page = int(request.args.get("per_page", 25))
+    except (TypeError, ValueError):
+        page, per_page = 1, 25
+    per_page = min(max(per_page, 1), 100)
+
+    db = get_db()
+    conditions, params = [], []
+    if q:
+        like = f"%{q}%"
+        conditions.append(
+            "(COALESCE(s.doc_number,'') LIKE ? OR COALESCE(c.name,'') LIKE ? "
+            "OR EXISTS (SELECT 1 FROM shipment_items si "
+            "           WHERE si.shipment_id = s.id AND si.un_number LIKE ?))"
+        )
+        params.extend([like, like, like])
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    total = db.execute(
+        f"SELECT COUNT(*) AS cnt FROM shipments s "
+        f"LEFT JOIN customers c ON s.customer_id = c.id {where}", params
+    ).fetchone()["cnt"]
+
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, pages)
+
+    rows = db.execute(
+        f"SELECT s.*, c.name AS customer_name, sa.name AS sender_name "
+        f"FROM shipments s "
+        f"LEFT JOIN customers c ON s.customer_id = c.id "
+        f"LEFT JOIN shipping_addresses sa ON s.shipping_address_id = sa.id "
+        f"{where} ORDER BY s.id DESC LIMIT ? OFFSET ?",
+        params + [per_page, (page - 1) * per_page]
+    ).fetchall()
+
+    items = []
+    for r in rows:
+        d = dict(r)
+        d["item_count"] = db.execute(
+            "SELECT COUNT(*) FROM shipment_items WHERE shipment_id = ?", (r["id"],)
+        ).fetchone()[0]
+        items.append(d)
+
+    db.close()
+    return jsonify({"items": items, "total": total,
+                    "page": page, "pages": pages})
+
+
+@app.route("/api/shipments/<int:id>", methods=["DELETE"])
+@login_required
+def api_shipment_delete(id):
+    """Sendung löschen (nur Admin). Positionen werden mitgelöscht."""
+    user = current_user()
+    if user and user.get("role") != ROLE_ADMIN:
+        return jsonify({"error": "Nur Administratoren dürfen Sendungen löschen."}), 403
+
+    db = get_db()
+    row = db.execute("SELECT doc_number FROM shipments WHERE id = ?", (id,)).fetchone()
+    if row is None:
+        db.close()
+        return jsonify({"error": f"Sendung #{id} nicht gefunden"}), 404
+
+    doc = row["doc_number"] or f"#{id}"
+    db.execute("DELETE FROM shipment_items WHERE shipment_id = ?", (id,))
+    db.execute("DELETE FROM shipments WHERE id = ?", (id,))
     db.commit()
     db.close()
 
-    return jsonify({
-        "total_points": total_points,
-        "is_exempt": is_exempt,
-        "items": calculated_items,
-        "shipment_id": shipment_id,
-    })
+    audit.log(audit.DELETE, "shipment", id, f"Sendung {doc} gelöscht")
+    return jsonify({"ok": True, "deleted": id})
+
+
+@app.route("/api/audit-log")
+@login_required
+@role_required(ROLE_ADMIN)
+def api_audit_log():
+    """Änderungsprotokoll (nur Administratoren)."""
+    try:
+        limit = min(int(request.args.get("limit", 200)), 1000)
+    except (TypeError, ValueError):
+        limit = 200
+
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    db.close()
+    return jsonify([dict(r) for r in rows])
 
 
 # ── ADR PDF Import API ─────────────────────────────────────────────────
@@ -320,7 +640,11 @@ def adr_preview():
 
 @app.route("/api/adr/import", methods=["POST"])
 def adr_import():
-    """Parse ADR PDF and save to database."""
+    """Parse ADR PDF and save to database (nur Administratoren)."""
+    user = current_user()
+    if user and user.get("role") != ROLE_ADMIN:
+        return jsonify({"error": "Keine Berechtigung"}), 403
+
     if "pdfFile" not in request.files:
         return jsonify({"error": "Keine PDF-Datei hochgeladen"}), 400
 
@@ -349,6 +673,13 @@ def adr_import():
     # Save to database
     file_path = pdf_file.filename
     result = import_adr_data(entries, version_name, file_path)
+
+    audit.log(
+        audit.IMPORT, "adr_version", None,
+        f"ADR-Import '{version_name}' aus {file_path}: "
+        f"{result.get('entries_imported', 0)} neu, "
+        f"{result.get('entries_updated', 0)} aktualisiert"
+    )
 
     return jsonify(result), 201
 
@@ -435,6 +766,10 @@ def api_un_database():
     if request.method == "GET":
         return _un_database_list()
     elif request.method == "POST":
+        # Stammdaten dürfen nur Administratoren anlegen.
+        user = current_user()
+        if user and user.get("role") != ROLE_ADMIN:
+            return jsonify({"error": "Keine Berechtigung"}), 403
         return _un_database_create()
 
 
@@ -586,22 +921,31 @@ def _un_database_create():
 
     row = db.execute("SELECT * FROM un_numbers WHERE id = ?", (new_id,)).fetchone()
     db.close()
+
+    audit.log(audit.CREATE, "un_number", new_id,
+              f"UN {un_number} ({substance_name_de}) angelegt")
+
     return jsonify(dict(row)), 201
 
 
 @app.route("/api/un-database/<int:id>", methods=["PUT"])
+@login_required
+@role_required(ROLE_ADMIN)
 def api_un_database_update(id):
     """UN-Nummern-Eintrag aktualisieren.
 
-    Aktualisierbare Felder: transport_category, points_factor, tunnel_code,
-    special_provisions (sowie alle Felder bei vollständigem Update).
+    Änderungen an transport_category und points_factor sind rechtlich
+    relevant und werden revisionssicher im Audit-Log festgehalten.
+    Nur Administratoren.
     """
     db = get_db()
 
-    row = db.execute("SELECT id FROM un_numbers WHERE id = ?", (id,)).fetchone()
+    row = db.execute("SELECT * FROM un_numbers WHERE id = ?", (id,)).fetchone()
     if row is None:
         db.close()
         return jsonify({"error": f"UN-Nummer #{id} nicht gefunden"}), 404
+
+    before = dict(row)
 
     data = request.get_json(force=True, silent=True)
     if data is None:
@@ -648,6 +992,13 @@ def api_un_database_update(id):
 
     updated = db.execute("SELECT * FROM un_numbers WHERE id = ?", (id,)).fetchone()
     db.close()
+
+    audit.log(
+        audit.UPDATE, "un_number", id,
+        f"UN {before.get('un_number')}: " +
+        audit.diff_text(before, dict(updated), tuple(allowed_fields))
+    )
+
     return jsonify(dict(updated))
 
 
@@ -783,10 +1134,11 @@ def api_customer_by_id(id):
         return jsonify(dict(row))
 
     elif request.method == "PUT":
-        row = db.execute("SELECT id FROM customers WHERE id = ?", (id,)).fetchone()
+        row = db.execute("SELECT * FROM customers WHERE id = ?", (id,)).fetchone()
         if row is None:
             db.close()
             return jsonify({"error": f"Kunde #{id} nicht gefunden"}), 404
+        before = dict(row)
 
         data = request.get_json(force=True, silent=True)
         if data is None:
@@ -820,6 +1172,14 @@ def api_customer_by_id(id):
 
         updated = db.execute("SELECT * FROM customers WHERE id = ?", (id,)).fetchone()
         db.close()
+
+        audit.log(
+            audit.UPDATE, "customer", id,
+            f"Kunde #{id}: " + audit.diff_text(
+                before, dict(updated),
+                ("name", "street", "zip", "city", "country", "contact",
+                 "phone", "email"))
+        )
         return jsonify(dict(updated))
 
     elif request.method == "DELETE":
@@ -843,6 +1203,9 @@ def api_customer_by_id(id):
         db.execute("DELETE FROM customers WHERE id = ?", (id,))
         db.commit()
         db.close()
+
+        audit.log(audit.DELETE, "customer", id,
+                  f"Kunde „{row['name']}” gelöscht")
         return jsonify({"message": f"Kunde „{row['name']}” wurde gelöscht", "id": id})
 
 
@@ -1082,11 +1445,12 @@ def api_shipping_address_by_id(id):
 
     elif request.method == "PUT":
         row = db.execute(
-            "SELECT id FROM shipping_addresses WHERE id = ?", (id,)
+            "SELECT * FROM shipping_addresses WHERE id = ?", (id,)
         ).fetchone()
         if row is None:
             db.close()
             return jsonify({"error": f"Adresse #{id} nicht gefunden"}), 404
+        before = dict(row)
 
         data = request.get_json(force=True, silent=True)
         if data is None:
@@ -1125,6 +1489,13 @@ def api_shipping_address_by_id(id):
             "SELECT * FROM shipping_addresses WHERE id = ?", (id,)
         ).fetchone()
         db.close()
+
+        audit.log(
+            audit.UPDATE, "shipping_address", id,
+            f"Adresse #{id}: " + audit.diff_text(
+                before, dict(updated),
+                ("name", "street", "zip", "city", "country", "is_default"))
+        )
         return jsonify(dict(updated))
 
     elif request.method == "DELETE":
@@ -1150,30 +1521,27 @@ def api_shipping_address_by_id(id):
         db.execute("DELETE FROM shipping_addresses WHERE id = ?", (id,))
         db.commit()
         db.close()
+
+        audit.log(audit.DELETE, "shipping_address", id,
+                  f"Adresse „{row['name']}” gelöscht")
         return jsonify({"message": f"Adresse „{row['name']}” wurde gelöscht", "id": id})
 
 
 @app.route("/api/shipment", methods=["POST"])
+@login_required
 def api_create_shipment():
-    """Neue Sendung (Beförderungsvorgang) anlegen.
-
-    Erwartet JSON mit:
-        - customer_id
-        - shipping_address_id
-        - items: Liste von {un_number, quantity, unit}
-
-    Antwort:
-        Die erstellte Sendung mit berechneten Punkten.
     """
-    # TODO: Implementierung
+    Neue Sendung anlegen.
+
+    Hinweis: Die Sendungsanlage erfolgt über POST /calculate mit
+    mode="save", damit Berechnung und rechtliche Prüfung nicht
+    auseinanderlaufen können. Dieser Endpunkt leitet entsprechend weiter.
+    """
     data = request.get_json(force=True, silent=True)
     if data is None:
         return jsonify({"error": "Keine gültigen JSON-Daten erhalten"}), 400
-
-    return jsonify({
-        "shipment": None,
-        "message": "Sendungserstellung noch nicht implementiert",
-    }), 201
+    data["mode"] = "save"
+    return calculate()
 
 
 # ----------------------------------------------------------------
@@ -1190,19 +1558,27 @@ def not_found(error):
 
 @app.errorhandler(500)
 def internal_error(error):
-    """500 — Interner Serverfehler."""
+    """
+    500 — Interner Serverfehler.
+
+    Gibt bewusst keine technischen Details an den Browser aus (kein
+    Stacktrace). Die Ursache wird serverseitig protokolliert.
+    """
+    import traceback
+    print(f"[error] 500: {error}\n{traceback.format_exc()}", file=sys.stderr)
     return render_template("error.html", title="500 — Interner Serverfehler",
                            error_code=500,
                            error_message="Es ist ein interner Fehler aufgetreten. "
                                          "Bitte versuchen Sie es später erneut."), 500
 
 
-@app.errorhandler(501)
-def not_implemented(error):
-    """501 — Noch nicht implementiert."""
-    return render_template("error.html", title="501 — Nicht implementiert",
-                           error_code=501,
-                           error_message=str(error)), 501
+@app.errorhandler(413)
+def too_large(error):
+    """413 — Upload zu groß."""
+    return jsonify({
+        "error": f"Die Datei ist zu groß (maximal "
+                 f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB)."
+    }), 413
 
 
 # ----------------------------------------------------------------
@@ -1210,4 +1586,23 @@ def not_implemented(error):
 # ----------------------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5050, debug=True)
+    # Nur für die lokale Entwicklung. Im Produktivbetrieb Gunicorn
+    # verwenden (siehe Dockerfile) und hinter einen Reverse-Proxy mit
+    # TLS setzen.
+    #
+    # Standardmäßig wird NUR auf 127.0.0.0.1 gelauscht. Ein Lauschen auf
+    # allen Schnittstellen muss explizit über ADR_HOST=0.0.0.0 aktiviert
+    # werden und setzt einen vorgeschalteten Reverse-Proxy voraus.
+    host = os.environ.get("ADR_HOST", "127.0.0.1")
+    port = int(os.environ.get("ADR_PORT", "5050"))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+
+    if host == "0.0.0.0" and not os.environ.get("ADR_ALLOW_PUBLIC"):
+        print(
+            "[warn] ADR_HOST=0.0.0.0 ohne TLS/Reverse-Proxy ist im "
+            "Produktivbetrieb nicht zulässig. Setzen Sie ADR_ALLOW_PUBLIC=1, "
+            "um diese Warnung zu bestätigen.",
+            file=sys.stderr,
+        )
+
+    app.run(host=host, port=port, debug=debug)

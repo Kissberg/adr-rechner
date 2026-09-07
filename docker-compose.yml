@@ -3,16 +3,26 @@ version: '3.8'
 services:
   adr-rechner:
     image: adr-rechner:latest
+    build: .
     container_name: adr-rechner
     restart: unless-stopped
+    # Nur auf dem lokalen Host veröffentlichen. Für den produktiven Zugriff
+    # einen Reverse-Proxy mit TLS vorschalten und den Port nicht direkt
+    # exponieren.
     ports:
-      - "5050:5050"
+      - "127.0.0.1:5050:5050"
     volumes:
       - adr_data:/app/data
       - adr_exports:/app/exports
     environment:
-      - FLASK_ENV=production
       - TZ=Europe/Berlin
+      - FLASK_DEBUG=0
+      - AUTH_ENABLED=${AUTH_ENABLED:-1}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY muss gesetzt werden}
+      - ADR_ADMIN_USER=${ADR_ADMIN_USER:-admin}
+      - ADR_ADMIN_PASSWORD=${ADR_ADMIN_PASSWORD:-}
+      - PREFER_SECURE_COOKIE=${PREFER_SECURE_COOKIE:-1}
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-50}
     logging:
       driver: json-file
       options:

@@ -330,8 +330,27 @@ def generate_befoerderungspapier(shipment_id):
     story.append(Paragraph("gemäß ADR 5.4.1", subtitle_style))
 
     # ── 3b. Exemption note (1.1.3.6) ───────────────────────────────────
+    # WICHTIG: Die Freistellung wird NICHT hier neu berechnet, sondern aus
+    # dem gespeicherten Prüfergebnis der Regelengine (adr_rules) übernommen.
+    # Die Punktzahl allein reicht nicht — ausgeschlossene Klassen, die
+    # Höchstmenge je Beförderungseinheit und die Beförderungsart sind
+    # zusätzliche Voraussetzungen (ADR 1.1.3.6.1 / .2 / .3).
     total_points = float(shipment["total_points"] or 0)
-    is_exempt = total_points <= 1000
+
+    try:
+        is_exempt = bool(int(shipment["is_exempt"] or 0))
+    except (KeyError, IndexError, TypeError, ValueError):
+        # Altdaten ohne Prüfergebnis: konservativ = nicht freigestellt
+        is_exempt = False
+
+    doc_number = ""
+    try:
+        doc_number = (shipment["doc_number"] or "").strip()
+    except (KeyError, IndexError, TypeError):
+        doc_number = ""
+
+    if doc_number:
+        story.append(Paragraph(f"Dokument-Nr.: {doc_number}", subtitle_style))
 
     if is_exempt:
         story.append(
@@ -392,8 +411,10 @@ def generate_befoerderungspapier(shipment_id):
         unit = (item["unit"] or "").strip()
         qty_display = f"{_format_quantity(qty)} {unit}"
 
-        # Tunnel code
+        # Tunnel code — nach ADR 5.4.1.1.2.3.3 in Klammern anzugeben
         tunnel = (item["tunnel_code"] or "").strip()
+        if tunnel and not (tunnel.startswith("(") and tunnel.endswith(")")):
+            tunnel = f"({tunnel})"
 
         # Item points (Punktzahl)
         item_pts = float(item["item_points"] or 0)
@@ -472,11 +493,14 @@ def generate_befoerderungspapier(shipment_id):
     )
     story.append(Spacer(1, 0.5 * cm))
 
-    # ── 3f. Declaration (i) ────────────────────────────────────────────
+    # ── 3f. Declaration (i) — Wortlaut nach ADR 5.4.1.1 (i) ────────────
     story.append(
         Paragraph(
-            "Der Absender erklärt, dass die gefährlichen Güter gemäß den "
-            "Vorschriften des ADR verpackt, gekennzeichnet und bezettelt sind.",
+            "Ich bescheinige hiermit, dass die oben bezeichneten Güter "
+            "nach den geltenden Vorschriften zur Beförderung zugelassen "
+            "sind, dass sie nach den Vorschriften des ADR verpackt, "
+            "gekennzeichnet und bezettelt sowie in jeder Hinsicht in "
+            "beförderungsfähigem Zustand sind.",
             decl_style,
         )
     )
@@ -494,7 +518,16 @@ def generate_befoerderungspapier(shipment_id):
                     "<b>Unterschrift des Absenders:</b> ____________________________",
                     sig_style,
                 ),
-            ]
+            ],
+            [
+                Paragraph("", sig_style),
+                Paragraph(
+                    "<b>Übernahmebestätigung des Fahrers "
+                    "(Name, Datum, Unterschrift):</b> "
+                    "____________________________",
+                    sig_style,
+                ),
+            ],
         ],
         colWidths=[available_width * 0.35, available_width * 0.65],
     )
@@ -524,8 +557,8 @@ def generate_befoerderungspapier(shipment_id):
         canvas.drawString(
             2 * cm,
             0.6 * cm,
-            f"Sendung #{shipment_id}  •  erstellt am {today_str}  •  "
-            f"ADR 1000-Punkte-Rechner",
+            f"{doc_number or ('Sendung #' + str(shipment_id))}  •  "
+            f"erstellt am {today_str}  •  ADR 1000-Punkte-Rechner",
         )
         canvas.restoreState()
 

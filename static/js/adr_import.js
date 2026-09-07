@@ -355,19 +355,8 @@
   // ── Utility Functions ──
 
   function escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
+    if (text === null || text === undefined) return '';
+    const map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+    return String(text).replace(/[&<>"']/g, function (c) { return map[c]; });
   }
-
-  function truncate(text, maxLen) {
-    if (!text) return "";
-    return text.length > maxLen ? text.substring(0, maxLen) + "…" : text;
-  }
-
-  // ── Initialization ──
-
-  document.addEventListener("DOMContentLoaded", () => {
-    loadHistory();
-  });
 })();

@@ -575,10 +575,9 @@ function getCategoryBadgeClass(cat) {
 }
 
 function escapeHtml(text) {
-    if (text == null) return '';
-    const div = document.createElement('div');
-    div.textContent = String(text);
-    return div.innerHTML;
+    if (text === null || text === undefined) return '';
+    const map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+    return String(text).replace(/[&<>"']/g, function (c) { return map[c]; });
 }
 
 function showToast(message, type) {

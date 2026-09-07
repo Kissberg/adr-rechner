@@ -22,6 +22,19 @@ const resultStatus = document.getElementById('resultStatus');
 const submitFeedback = document.getElementById('submitFeedback');
 const customerSelect = document.getElementById('customerSelect');
 const addressSelect = document.getElementById('addressSelect');
+const transportFormSelect = document.getElementById('transportFormSelect');
+
+/**
+ * Escapt HTML-Sonderzeichen inklusive Anführungszeichen.
+ * Wichtig: Eine Umsetzung über `el.innerHTML = el.textContent` escapet
+ * nur & < > — in Attributkontexten (z. B. data-name="…") bleibt dann
+ * eine XSS-Lücke. Deshalb wird hier explizit ersetzt.
+ */
+function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
+    const map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+    return String(text).replace(/[&<>"']/g, function (c) { return map[c]; });
+}
 
 // ── Global: active custom dropdown ──────────────────────────────────────
 let activeDropdown = null;  // { wrapper, input, list, data }
@@ -523,6 +536,9 @@ submitBtn.addEventListener('click', async () => {
                 items: items,
                 customer_id: parseInt(customerId),
                 shipping_address_id: parseInt(addressId),
+                transport_form: transportFormSelect
+                    ? transportFormSelect.value : 'package',
+                mode: 'save',
             }),
         });
 
@@ -534,19 +550,40 @@ submitBtn.addEventListener('click', async () => {
         }
 
         resultPoints.textContent = result.total_points;
+
+        // Ausschlussgründe nach ADR 1.1.3.6 transparent ausweisen.
+        // Die Punktzahl allein ist kein Freistellungsnachweis.
+        const reasons = result.blocking_reasons || [];
+        let reasonsHtml = '';
+        if (reasons.length > 0) {
+            reasonsHtml = '<div class="alert alert-warning mt-3 mb-0 py-2 px-3">'
+                + '<strong><i class="bi bi-exclamation-triangle me-1"></i>'
+                + 'Gründe gegen eine Freistellung:</strong>'
+                + '<ul class="mb-0 mt-1 small">'
+                + reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')
+                + '</ul></div>';
+        }
+
         if (result.is_exempt) {
             resultStatus.innerHTML = '<span class="badge bg-success fs-6 px-3 py-2">Freigestellt nach ADR 1.1.3.6</span>'
-                + '<br><small class="text-muted mt-2 d-inline-block">Die Beförderung ist von den Vorschriften des ADR freigestellt.</small>';
+                + '<br><small class="text-muted mt-2 d-inline-block">'
+                + 'Alle Voraussetzungen der Abschnitte 1.1.3.6.1 bis 1.1.3.6.3 sind erfüllt.</small>'
+                + reasonsHtml;
         } else {
+            const cause = reasons.length > 0
+                ? 'Mindestens eine Voraussetzung nach ADR 1.1.3.6 ist nicht erfüllt.'
+                : 'Die 1000-Punkte-Grenze wurde überschritten.';
             resultStatus.innerHTML = '<span class="badge bg-danger fs-6 px-3 py-2">Nicht freigestellt — ADR-Vorschriften voll anwendbar</span>'
-                + '<br><small class="text-muted mt-2 d-inline-block">Die 1000-Punkte-Grenze wurde überschritten.</small>';
+                + `<br><small class="text-muted mt-2 d-inline-block">${escapeHtml(cause)}</small>`
+                + reasonsHtml;
         }
 
         showFeedback('success',
-            `Berechnung erfolgreich! Sendung Nr. ${result.shipment_id} gespeichert.`,
+            `Berechnung erfolgreich! Sendung ${result.shipment_id ? 'Nr. ' + result.shipment_id : ''} gespeichert.`,
             [`Gesamtpunktzahl: ${result.total_points} Punkte`,
              `Status: ${result.is_exempt ? 'Freigestellt (ADR 1.1.3.6)' : 'Nicht freigestellt'}`,
-             `${result.items.length} Position(en) berechnet.`]);
+             result.transport_form_label ? `Beförderungsart: ${result.transport_form_label}` : '',
+             `${result.items.length} Position(en) berechnet.`].filter(Boolean));
 
         setTimeout(() => {
             window.location.href = `/befoerderungspapier/${result.shipment_id}`;

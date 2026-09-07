@@ -91,6 +91,22 @@
                         <div class="invalid-feedback">Bitte wählen Sie eine Versandadresse aus.</div>
                     </div>
                 </div>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label for="transportFormSelect" class="form-label required">
+                            Beförderungsart
+                        </label>
+                        <select class="form-select" id="transportFormSelect">
+                            <option value="package" selected>Stückgut (Verpackung)</option>
+                            <option value="tank">Tank</option>
+                            <option value="bulk">Schüttgut / loser Schüttgut</option>
+                        </select>
+                        <div class="form-text">
+                            Die Freistellung nach ADR 1.1.3.6 gilt ausschließlich
+                            für Güter in Verpackungen (Stückgut).
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

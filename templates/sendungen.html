@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+
+{% block title %}Sendungsverlauf — ADR 1000-Punkte-Rechner{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col">
+        <h2 class="mb-1"><i class="bi bi-clock-history me-2"></i>Sendungsverlauf</h2>
+        <p class="text-muted mb-0">
+            Alle gespeicherten Sendungen mit Prüfergebnis nach ADR 1.1.3.6.
+        </p>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="row g-2 align-items-center">
+            <div class="col-md-8">
+                <input type="search" id="searchInput" class="form-control"
+                       placeholder="Suche nach Dokumentnummer, Kunde oder UN-Nummer …">
+            </div>
+            <div class="col-md-4 text-md-end">
+                <span class="text-muted small" id="resultInfo"></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover table-sm align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Dokument</th>
+                    <th>Datum</th>
+                    <th>Empfänger</th>
+                    <th>Absender</th>
+                    <th>Form</th>
+                    <th class="text-end">Positionen</th>
+                    <th class="text-end">Punkte</th>
+                    <th class="text-center">Status</th>
+                    <th class="text-end">Aktionen</th>
+                </tr>
+            </thead>
+            <tbody id="shipmentTable">
+                <tr><td colspan="9" class="text-center text-muted py-4">Lade …</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<nav class="mt-3">
+    <ul class="pagination pagination-sm justify-content-center" id="pager"></ul>
+</nav>
+
+<script>
+const FORM_LABELS = {package: 'Stückgut', tank: 'Tank', bulk: 'Schüttgut'};
+let currentPage = 1;
+let currentQuery = '';
+
+function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
+    const map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+    return String(text).replace(/[&<>"']/g, c => map[c]);
+}
+
+function fmtDate(value) {
+    if (!value) return '–';
+    const d = new Date(value.replace(' ', 'T'));
+    return isNaN(d) ? escapeHtml(value) : d.toLocaleString('de-DE');
+}
+
+async function load(page = 1) {
+    currentPage = page;
+    const params = new URLSearchParams({page, per_page: 25});
+    if (currentQuery) params.set('q', currentQuery);
+
+    const res = await fetch('/api/shipments?' + params.toString());
+    if (res.status === 401) { location.href = '/auth/login'; return; }
+    const data = await res.json();
+
+    const tbody = document.getElementById('shipmentTable');
+    if (!data.items.length) {
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">' +
+            'Keine Sendungen gefunden.</td></tr>';
+        document.getElementById('resultInfo').textContent = '';
+        document.getElementById('pager').innerHTML = '';
+        return;
+    }
+
+    tbody.innerHTML = data.items.map(s => {
+        const status = s.is_exempt
+            ? '<span class="badge bg-success">freigestellt</span>'
+            : '<span class="badge bg-danger">nicht freigestellt</span>';
+        const doc = escapeHtml(s.doc_number || ('#' + s.id));
+        return `<tr>
+            <td><a href="/befoerderungspapier/${s.id}">${doc}</a></td>
+            <td>${fmtDate(s.created_at)}</td>
+            <td>${escapeHtml(s.customer_name || '–')}</td>
+            <td>${escapeHtml(s.sender_name || '–')}</td>
+            <td>${escapeHtml(FORM_LABELS[s.transport_form] || s.transport_form || 'Stückgut')}</td>
+            <td class="text-end">${s.item_count}</td>
+            <td class="text-end">${Number(s.total_points || 0).toLocaleString('de-DE')}</td>
+            <td class="text-center">${status}</td>
+            <td class="text-end">
+                <a class="btn btn-sm btn-outline-primary"
+                   href="/befoerderungspapier/${s.id}/pdf" title="PDF">
+                    <i class="bi bi-file-earmark-pdf"></i>
+                </a>
+                <button class="btn btn-sm btn-outline-danger"
+                        onclick="remove(${s.id})" title="Löschen">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </td>
+        </tr>`;
+    }).join('');
+
+    document.getElementById('resultInfo').textContent =
+        `${data.total} Sendung(en)`;
+
+    let pager = '';
+    for (let p = 1; p <= data.pages; p++) {
+        pager += `<li class="page-item ${p === data.page ? 'active' : ''}">
+            <a class="page-link" href="#" onclick="load(${p}); return false;">${p}</a></li>`;
+    }
+    document.getElementById('pager').innerHTML = pager;
+}
+
+async function remove(id) {
+    if (!confirm('Sendung endgültig löschen?')) return;
+    const res = await fetch('/api/shipments/' + id, {method: 'DELETE'});
+    if (res.ok) {
+        load(currentPage);
+    } else {
+        const d = await res.json();
+        alert(d.error || 'Löschen fehlgeschlagen.');
+    }
+}
+
+let timer = null;
+document.getElementById('searchInput').addEventListener('input', function (e) {
+    clearTimeout(timer);
+    currentQuery = e.target.value.trim();
+    timer = setTimeout(() => load(1), 300);
+});
+
+load(1);
+</script>
+{% endblock %}

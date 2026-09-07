@@ -16,20 +16,26 @@ Transport Categories (ADR 1.1.3.6, Abschnitt 1.1.3.6.3, Tabelle):
 
 import sqlite3
 import os
+import secrets
 from datetime import datetime
 
 DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 DB_PATH = os.path.join(DB_DIR, "adr.db")
 
+# Maximale Wartezeit bei Schreibkonflikten (ms). Erhöht, weil mehrere
+# Gunicorn-Worker gleichzeitig auf dieselbe SQLite-Datei zugreifen.
+BUSY_TIMEOUT_MS = 15000
+
 
 def get_db() -> sqlite3.Connection:
     """Return a SQLite connection with row factory and WAL mode enabled."""
     os.makedirs(DB_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     return conn
 
 
@@ -123,9 +129,35 @@ def init_db() -> None:
             entries_updated  INTEGER DEFAULT 0
         );
 
+        -- Benutzer (Authentifizierung / Autorisierung)
+        CREATE TABLE IF NOT EXISTS users (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            username       VARCHAR(100) NOT NULL UNIQUE,
+            password_hash  VARCHAR(300) NOT NULL,
+            role           VARCHAR(20) NOT NULL DEFAULT 'user',
+            active         BOOLEAN NOT NULL DEFAULT 1,
+            created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_login     TIMESTAMP
+        );
+
+        -- Änderungsprotokoll (append-only, DSGVO Art. 30 / GoBD)
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            user_id     INTEGER,
+            username    VARCHAR(100),
+            action      VARCHAR(20) NOT NULL,
+            entity      VARCHAR(50) NOT NULL,
+            entity_id   INTEGER,
+            detail      TEXT,
+            ip_address  VARCHAR(50)
+        );
+
         -- Index for fast UN number lookups
         CREATE INDEX IF NOT EXISTS idx_un_number ON un_numbers(un_number);
         CREATE INDEX IF NOT EXISTS idx_shipment_id ON shipment_items(shipment_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+        CREATE INDEX IF NOT EXISTS idx_shipments_created ON shipments(created_at);
     """)
 
     # ── Migrations for columns added after initial schema ──
@@ -146,8 +178,66 @@ def init_db() -> None:
     except sqlite3.OperationalError:
         pass
 
+    # ── v2.0: Sendungen um rechtlich relevante Felder erweitern ──
+    V2_SHIPMENT_COLUMNS = {
+        "doc_number": "VARCHAR(40)",
+        "transport_form": "VARCHAR(20) DEFAULT 'package'",
+        "exemption_reasons": "TEXT",
+        "warnings": "TEXT",
+        "created_by": "VARCHAR(100)",
+        "notes": "TEXT",
+    }
+    for col, ddl in V2_SHIPMENT_COLUMNS.items():
+        try:
+            cursor.execute(f"ALTER TABLE shipments ADD COLUMN {col} {ddl}")
+        except sqlite3.OperationalError:
+            pass
+
+    V2_ITEM_COLUMNS = {
+        "hazard_class": "VARCHAR(10)",
+        "total_quantity": "DECIMAL(12,3)",
+        "limit_exceeded": "BOOLEAN DEFAULT 0",
+        "class_excluded": "BOOLEAN DEFAULT 0",
+    }
+    for col, ddl in V2_ITEM_COLUMNS.items():
+        try:
+            cursor.execute(f"ALTER TABLE shipment_items ADD COLUMN {col} {ddl}")
+        except sqlite3.OperationalError:
+            pass
+
     conn.commit()
     conn.close()
+
+
+def next_doc_number(conn: sqlite3.Connection = None) -> str:
+    """
+    Erzeugt eine fortlaufende, eindeutige Beförderungspapier-Nummer.
+
+    Format: BP-YYYY-NNNNNN (z. B. BP-2026-000042)
+    Die Nummer wird im Formularfeld des Beförderungspapiers ausgewiesen und
+    dient der Zuordnung zum archivierten PDF.
+    """
+    own = conn is None
+    conn = conn or get_db()
+    try:
+        year = datetime.now().year
+        prefix = f"BP-{year}-%"
+        row = conn.execute(
+            "SELECT doc_number FROM shipments "
+            "WHERE doc_number LIKE ? ORDER BY doc_number DESC LIMIT 1",
+            (prefix,),
+        ).fetchone()
+        if row and row["doc_number"]:
+            try:
+                last = int(str(row["doc_number"]).rsplit("-", 1)[-1])
+            except ValueError:
+                last = 0
+        else:
+            last = 0
+        return f"BP-{year}-{last + 1:06d}"
+    finally:
+        if own:
+            conn.close()
 
 
 
@@ -182,6 +272,9 @@ def seed_un_numbers() -> int:
 
     now = datetime.now().isoformat()
     inserted = 0
+    seen = set()
+    duplicates = 0
+    incomplete = 0
 
     for e in raw_entries:
         un = e.get("un_number", "").strip()
@@ -189,13 +282,32 @@ def seed_un_numbers() -> int:
             continue
 
         name_de = (e.get("substance_name_de") or "").strip()[:200]
-        hc = e.get("hazard_class") or None
-        pg = e.get("packing_group") or None
-        tc = e.get("transport_category", 3)
-        tunnel = e.get("tunnel_code") or None
-        mq = MAX_QTY.get(tc)
-        danger_label = hc
-        points_factor = FACTOR[tc]
+        hc = (e.get("hazard_class") or "").strip() or None
+        pg = (e.get("packing_group") or "").strip() or None
+        tunnel = (e.get("tunnel_code") or "").strip() or None
+
+        # ── Beförderungskategorie: KEIN gefährlicher Standardwert ──
+        # Fehlt die Kategorie, wird NULL gespeichert. Die Regelengine
+        # (adr_rules.py) behandelt NULL als "nicht freistellungsfähig"
+        # (Fail-Safe), anstatt stillschweigend Kategorie 3 anzunehmen.
+        try:
+            tc = int(e.get("transport_category"))
+        except (TypeError, ValueError):
+            tc = None
+        if tc not in FACTOR:
+            tc = None
+        if tc is None:
+            incomplete += 1
+
+        # ── Duplikate entfernen (gleiche UN + Klasse + VG + Kategorie) ──
+        key = (un, hc, pg, tc, tunnel)
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+
+        mq = MAX_QTY.get(tc) if tc is not None else None
+        points_factor = FACTOR.get(tc) if tc is not None else None
 
         cursor.execute(
             """INSERT INTO un_numbers
@@ -204,7 +316,7 @@ def seed_un_numbers() -> int:
                 special_provisions, points_factor, max_quantity_per_transport,
                 adr_version, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ADR 2025', ?)""",
-            (un, name_de, "", hc, danger_label,
+            (un, name_de, "", hc, hc,
              pg, tc, tunnel, None,
              points_factor, mq, now)
         )
@@ -212,6 +324,14 @@ def seed_un_numbers() -> int:
 
     conn.commit()
     conn.close()
+
+    if duplicates:
+        print(f"[seed] {duplicates} doppelte Einträge übersprungen.")
+    if incomplete:
+        print(f"[seed] WARNUNG: {incomplete} Einträge ohne gültige "
+              f"Beförderungskategorie — diese sind nicht freistellungsfähig. "
+              f"Bitte mit der amtlichen ADR-Tabelle A abgleichen.")
+
     return inserted
 
 
