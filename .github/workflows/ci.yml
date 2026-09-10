@@ -28,7 +28,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Unit-Tests
-        run: pytest tests/ -v
+        run: python -m pytest tests/ -v
 
       - name: Abhängigkeiten auf bekannte Schwachstellen prüfen
         run: |
