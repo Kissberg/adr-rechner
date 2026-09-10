@@ -8,16 +8,18 @@ Datenbankabhängigkeiten, damit es unabhängig unit-getestet werden kann.
 ────────────────────────────────────────────────────────────────────────
 WICHTIG — Fail-Safe-Prinzip
 ────────────────────────────────────────────────────────────────────────
-Kann eine Voraussetzung nicht zweifelsfrei geprüft werden (z. B. weil der
-Klassifizierungscode fehlt), wird NICHT freigestellt. Eine fälschlich
+Kann eine Voraussetzung nicht zweifelsfrei geprüft werden (z. B. weil die
+Beförderungskategorie fehlt), wird NICHT freigestellt. Eine fälschlich
 erteile Freistellung ist ein Rechtsverstoß; eine fälschlich verweigerte
 Freistellung führt lediglich zu einer (legalen) Vollanwendung des ADR.
 
 Rechtsgrundlagen
+  1.1.3.6.1  Zuordnung zu Beförderungskategorien 0–4 (Tabelle A Spalte 15)
+  1.1.3.6.2  Freistellung gilt nur für Güter in Versandstücken (Stückgut);
+             Katalog der dann nicht anwendbaren Vorschriften
   1.1.3.6.3  Tabelle: Beförderungskategorie, Punktfaktor,
-             Höchstmenge je Beförderungseinheit
-  1.1.3.6.2  Ausschluss bestimmter Güter von der Freistellung
-  1.1.3.6.1  Freistellung gilt nur für Güter in Verpackungen (Stückgut)
+             Höchstmenge je Beförderungseinheit (inkl. Fussnote a)
+  1.1.3.6.4  Mischrechnung (Faktoren 50/20/3/1, Summe ≤ 1000)
 """
 
 from __future__ import annotations
@@ -46,19 +48,20 @@ TRANSPORT_CATEGORIES: Dict[int, Dict[str, Optional[float]]] = {
 POINT_LIMIT = 1000
 
 # ─────────────────────────────────────────────────────────────────────
-# ADR 1.1.3.6.2 — Von der Freistellung ausgeschlossene Güter
+# ADR 1.1.3.6.3 Fussnote a) — abweichende Höchstmenge und Faktor
 # ─────────────────────────────────────────────────────────────────────
-# Klasse 7 (radioaktive Stoffe) und Klasse 6.2 (infektiöse Stoffe)
-# sind von der 1000-Punkte-Freistellung ausgeschlossen.
-EXCLUDED_HAZARD_CLASSES = frozenset({"7", "6.2"})
-
-# Klasse 1 ist grundsätzlich ausgeschlossen; ausgenommen sind Gegenstände
-# des Klassifizierungscodes 1.4S.
-CLASS_1 = "1"
-CLASS_1_EXEMPT_CODE = "1.4S"
+# Für die UN-Nummern 0081, 0082, 0084, 0241, 0331, 0332, 0482, 1005 und
+# 1017 (Beförderungskategorie 1) beträgt die höchstzulässige Gesamtmenge
+# je Beförderungseinheit 50 kg und der Faktor in der Mischrechnung
+# (1.1.3.6.4) 20 statt 50.
+FOOTNOTE_A_UN_NUMBERS = frozenset({
+    "0081", "0082", "0084", "0241", "0331", "0332", "0482", "1005", "1017",
+})
+FOOTNOTE_A_FACTOR = 20.0
+FOOTNOTE_A_MAX_QTY = 50.0
 
 # ─────────────────────────────────────────────────────────────────────
-# ADR 1.1.3.6.1 — Freistellung gilt ausschließlich für Stückgut
+# ADR 1.1.3.6.2 — Freistellung gilt ausschließlich für Versandstücke
 # ─────────────────────────────────────────────────────────────────────
 TRANSPORT_FORM_PACKAGE = "package"   # Stückgut / Verpackung
 TRANSPORT_FORM_TANK = "tank"         # Tank
@@ -66,7 +69,7 @@ TRANSPORT_FORM_BULK = "bulk"         # Schüttgut / loser Schüttgut
 VALID_TRANSPORT_FORMS = frozenset({
     TRANSPORT_FORM_PACKAGE, TRANSPORT_FORM_TANK, TRANSPORT_FORM_BULK
 })
-# Nur Stückgut kann nach 1.1.3.6 freigestellt werden.
+# Nur Güter „in Versandstücken" können nach 1.1.3.6 freigestellt werden.
 EXEMPTABLE_TRANSPORT_FORMS = frozenset({TRANSPORT_FORM_PACKAGE})
 
 TRANSPORT_FORM_LABELS = {
@@ -81,21 +84,6 @@ def normalize_hazard_class(hazard_class: Optional[str]) -> str:
     if hazard_class is None:
         return ""
     return str(hazard_class).strip().rstrip(".")
-
-
-def _is_1_4s(transport_category: Optional[int],
-             classification_code: Optional[str]) -> bool:
-    """
-    Ermittelt, ob ein Gut der Klasse 1 dem Klassifizierungscode 1.4S
-    entspricht und damit (trotz Klasse 1) freistellungsfähig ist.
-
-    Der Klassifizierungscode ist in den Seed-Daten nicht enthalten. Liegt
-    er nicht vor, wird hilfsweise die Beförderungskategorie 4 herangezogen
-    (Kat. 4 umfasst u. a. 1.4S). Im Zweifel gilt Fail-Safe → kein 1.4S.
-    """
-    if classification_code:
-        return classification_code.strip().upper() == CLASS_1_EXEMPT_CODE
-    return transport_category == 4
 
 
 @dataclass
@@ -179,20 +167,18 @@ def evaluate_transport(
     Prüft eine Sendung vollständig gegen ADR 1.1.3.6.
 
     Eine Sendung ist NUR dann freigestellt, wenn alle Bedingungen erfüllt sind:
-      1. Die Beförderung erfolgt als Stückgut (1.1.3.6.1)
-      2. Kein Gut fällt unter den Ausschluss nach 1.1.3.6.2
-         (Klasse 1 außer 1.4S, Klasse 7, Klasse 6.2, Kategorie 0)
+      1. Die Beförderung erfolgt als Stückgut (1.1.3.6.2 „in Versandstücken")
+      2. Kein Gut hat die Beförderungskategorie 0 (1.1.3.6.3)
       3. Für jedes Gut wird die Höchstmenge je Beförderungseinheit
-         eingehalten (1.1.3.6.3)
-      4. Die Gesamtpunktzahl überschreitet 1000 nicht
+         eingehalten (1.1.3.6.3, inkl. Fussnote a)
+      4. Die Gesamtpunktzahl überschreitet 1000 nicht (1.1.3.6.4)
 
     Args:
         items: Liste von Diktaten mit mindestens
                {un_number, quantity, num_packages, transport_category,
-                hazard_class, points_factor}. Optionale Schlüssel:
+                hazard_class}. Optionale Schlüssel:
                un_db_id, substance_name, unit, package_type,
-               max_quantity_per_transport, packing_group,
-               classification_code.
+               max_quantity_per_transport, packing_group.
         transport_form: 'package' | 'tank' | 'bulk'
 
     Returns:
@@ -206,8 +192,8 @@ def evaluate_transport(
 
     if result.transport_form not in EXEMPTABLE_TRANSPORT_FORMS:
         result.blocking_reasons.append(
-            f"1.1.3.6.1: Die Freistellung gilt ausschließlich für Güter in "
-            f"Verpackungen (Stückgut). Gewählte Beförderungsart: "
+            f"1.1.3.6.2: Die Freistellung gilt ausschließlich für Güter in "
+            f"Versandstücken (Stückgut). Gewählte Beförderungsart: "
             f"{TRANSPORT_FORM_LABELS.get(result.transport_form, result.transport_form)}."
         )
 
@@ -260,30 +246,20 @@ def evaluate_transport(
             )
         else:
             factor = cat_spec["factor"]
+            max_qty = cat_spec["max_qty_per_tu"]
+            # Fussnote a) zu 1.1.3.6.3: abweichende Höchstmenge (50 kg) und
+            # Faktor (20) für bestimmte UN-Nummern der Kategorie 1.
+            if item.un_number in FOOTNOTE_A_UN_NUMBERS:
+                factor = FOOTNOTE_A_FACTOR
+                max_qty = FOOTNOTE_A_MAX_QTY
+                item.notes.append(
+                    "Fussnote a) zu 1.1.3.6.3: Höchstmenge 50 kg, Faktor 20."
+                )
             # Kategorie 4 = unbegrenzt → für die 1000-Punkte-Regel Faktor 0
             item.factor = 0.0 if factor is None else float(factor)
-            item.max_qty_per_tu = cat_spec["max_qty_per_tu"]
+            item.max_qty_per_tu = max_qty
 
-            # ── 1.1.3.6.2 Ausschlussprüfung ──
-            if item.hazard_class in EXCLUDED_HAZARD_CLASSES:
-                item.class_excluded = True
-                result.blocking_reasons.append(
-                    f"1.1.3.6.2: UN {item.un_number} (Klasse {item.hazard_class}) "
-                    f"ist von der Freistellung ausgeschlossen."
-                )
-            elif item.hazard_class == CLASS_1:
-                is_14s = _is_1_4s(cat, raw.get("classification_code"))
-                if not is_14s:
-                    item.class_excluded = True
-                    result.blocking_reasons.append(
-                        f"1.1.3.6.2: UN {item.un_number} (Klasse 1) ist von der "
-                        f"Freistellung ausgeschlossen — ausgenommen sind nur "
-                        f"Gegenstände des Klassifizierungscodes 1.4S."
-                    )
-                else:
-                    item.notes.append(
-                        "Klasse 1, Klassifizierungscode 1.4S — freistellungsfähig."
-                    )
+            # ── 1.1.3.6.3: Kategorie 0 ist niemals freigestellt ──
             if cat == 0:
                 item.class_excluded = True
                 result.blocking_reasons.append(

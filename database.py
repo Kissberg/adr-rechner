@@ -4,20 +4,33 @@ Creates and manages the SQLite database for dangerous goods transport calculatio
 per ADR 1.1.3.6 (1000-Punkte-Regel).
 
 Transport Categories (ADR 1.1.3.6, Abschnitt 1.1.3.6.3, Tabelle):
-  Category 0: factor 0    — Class 7 (excepted), certain specific UN numbers
-  Category 1: factor 50   — Class 1 (1.1, 1.2, 1.5), toxic gases (T, TC, TO, TFC, TOC),
-                             desensitized explosives, organic peroxides Type B
-  Category 2: factor 3    — Flammable gases (group F), PG I substances (except Cat 1),
-                             Class 6.1 PG I (inhalation), Class 8 PG I, lithium batteries
-  Category 3: factor 1    — PG II/III of Classes 3, 4.1, 4.2, 4.3, 5.1, 6.1, 8,
-                             Class 9 (most), non-toxic/non-flammable gases (A, O groups)
-  Category 4: unlimited   — Class 1.4S, certain Class 9, empty uncleaned packagings
+  Category 0: factor 0    — Class 1 (1.1A/L, 1.2L, 1.3L, UN 0190), Class 6.2
+                             (UN 2814/2900/3549), Class 7 (UN 2912–2919, 2977,
+                             2978, 3321–3333), certain specific UN numbers
+  Category 1: factor 50   — Class 1 (1.1B–1.1J, 1.2B–1.2J, 1.3C/G/H/J, 1.5D),
+                             toxic gases (T, TC, TO, TFC, TOC), PG I substances,
+                             organic peroxides Type B
+                             (Fussnote a: UN 0081/0082/0084/0241/0331/0332/0482/
+                              1005/1017 → Faktor 20, Höchstmenge 50 kg)
+  Category 2: factor 3    — Flammable gases (group F), PG II substances,
+                             Class 1 (1.4B–1.4G, 1.6N), Class 6.2 (UN 3291),
+                             lithium batteries
+  Category 3: factor 1    — PG III substances, non-toxic/non-flammable gases
+                             (groups A, O)
+  Category 4: unlimited   — Class 1.4S, Class 7 (UN 2908–2911), empty
+                             uncleaned packagings
 """
 
 import sqlite3
 import os
 import secrets
 from datetime import datetime
+
+from adr_rules import (
+    FOOTNOTE_A_UN_NUMBERS,
+    FOOTNOTE_A_FACTOR,
+    FOOTNOTE_A_MAX_QTY,
+)
 
 DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 DB_PATH = os.path.join(DB_DIR, "adr.db")
@@ -308,6 +321,12 @@ def seed_un_numbers() -> int:
 
         mq = MAX_QTY.get(tc) if tc is not None else None
         points_factor = FACTOR.get(tc) if tc is not None else None
+
+        # Fussnote a) zu 1.1.3.6.3: Höchstmenge 50 kg und Faktor 20 für
+        # bestimmte UN-Nummern der Beförderungskategorie 1.
+        if un in FOOTNOTE_A_UN_NUMBERS:
+            mq = FOOTNOTE_A_MAX_QTY
+            points_factor = FOOTNOTE_A_FACTOR
 
         cursor.execute(
             """INSERT INTO un_numbers

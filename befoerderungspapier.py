@@ -406,10 +406,18 @@ def generate_befoerderungspapier(shipment_id):
             plural = _pluralize(pkg_type)
             pkg_display = f"{num_pkg} {plural}"
 
-        # (f) Total quantity with unit
+        # (f) Gesamtmenge (Menge × Anzahl Verpackungen) mit Einheit
         qty = float(item["quantity"] or 0)
+        total_qty = qty * num_pkg
+        # Bevorzugt den gespeicherten Gesamtwert verwenden (falls vorhanden)
+        try:
+            stored_total = float(item["total_quantity"] or 0)
+        except (KeyError, IndexError, TypeError, ValueError):
+            stored_total = 0.0
+        if stored_total:
+            total_qty = stored_total
         unit = (item["unit"] or "").strip()
-        qty_display = f"{_format_quantity(qty)} {unit}"
+        qty_display = f"{_format_quantity(total_qty)} {unit}"
 
         # Tunnel code — nach ADR 5.4.1.1.2.3.3 in Klammern anzugeben
         tunnel = (item["tunnel_code"] or "").strip()
