@@ -51,39 +51,52 @@ def ensure_default_admin() -> None:
     """
     Legt den ersten Administrator an, sofern noch kein Benutzer existiert.
     Passwort aus ADR_ADMIN_PASSWORD, sonst zufällig (einmalig im Log).
+
+    Wichtig bei mehreren Gunicorn-Workern: Alle Worker führen diesen Code
+    beim Import aus. Ein normales "erst prüfen, dann einfügen" kann daher
+    eine Race-Condition haben (beide Worker sehen eine leere Tabelle, der
+    zweite INSERT schlägt fehl und der Worker stürzt ab). INSERT OR IGNORE
+    nutzt den UNIQUE-Constraint als Schutz — der verlierende Worker erkennt
+    an rowcount == 0, dass ein anderer Worker den Benutzer angelegt hat.
+
+    Ein bereits vorhandener Benutzer wird niemals überschrieben.
     """
+    username = os.environ.get("ADR_ADMIN_USER", "admin").strip() or "admin"
+    password = os.environ.get("ADR_ADMIN_PASSWORD", "").strip()
+    generated = False
+    if not password:
+        password = secrets.token_urlsafe(16)
+        generated = True
+
     conn = get_db()
     try:
-        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        if count > 0:
-            return
-
-        username = os.environ.get("ADR_ADMIN_USER", "admin").strip() or "admin"
-        password = os.environ.get("ADR_ADMIN_PASSWORD", "").strip()
-        generated = False
-        if not password:
-            password = secrets.token_urlsafe(16)
-            generated = True
-
-        conn.execute(
-            "INSERT INTO users (username, password_hash, role, active, created_at) "
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO users (username, password_hash, role, active, created_at) "
             "VALUES (?, ?, ?, 1, ?)",
             (username, generate_password_hash(password), ROLE_ADMIN,
              datetime.now().isoformat(timespec="seconds")),
         )
         conn.commit()
-
-        if generated:
-            print("=" * 72)
-            print("  ERSTER ADMINISTRATOR WURDE ANGELEGT")
-            print(f"  Benutzername : {username}")
-            print(f"  Passwort     : {password}")
-            print("  Bitte nach der ersten Anmeldung sofort ändern.")
-            print("=" * 72)
-        else:
-            print(f"[auth] Administrator '{username}' angelegt.")
+        created = (cur.rowcount or 0) > 0
     finally:
         conn.close()
+
+    if not created:
+        # Bereits vorhanden (vorheriger Start oder paralleler Worker).
+        # Das Passwort wird bewusst NICHT zurückgesetzt, damit niemand durch
+        # bloßes Setzen einer Umgebungsvariable Zugriff auf fremde Konten
+        # übernehmen kann.
+        return
+
+    if generated:
+        print("=" * 72)
+        print("  ERSTER ADMINISTRATOR WURDE ANGELEGT")
+        print(f"  Benutzername : {username}")
+        print(f"  Passwort     : {password}")
+        print("  Bitte nach der ersten Anmeldung sofort ändern.")
+        print("=" * 72)
+    else:
+        print(f"[auth] Administrator '{username}' angelegt.")
 
 
 def verify_credentials(username: str, password: str) -> Optional[sqlite3.Row]:
