@@ -1,362 +1,384 @@
 /**
- * ADR PDF Import — Client-side JavaScript
+ * Daten & Verifikation — Client-side JavaScript
  *
- * Handles:
- *   - Drag & drop file upload
- *   - Preview (parse without saving)
- *   - Import (parse + save to database)
- *   - Version history loading
+ * Zwei getrennte Abläufe:
+ *   1. BAM-Datei (xlsx/csv) hochladen, prüfen und importieren.
+ *      Das ist die einzige Datenquelle für den UN-Bestand.
+ *   2. ADR-PDF hochladen und verifizieren:
+ *      - eigener Parse von Tabelle A gegen den Datenbestand
+ *      - Wortlaut von 1.1.3.6 und 5.4.1.1 samt Änderungshinweis
+ *      Das PDF schreibt nichts in die Datenbank.
  */
 
 (function () {
   "use strict";
 
-  // ── DOM Elements ──
-  const dropZone = document.getElementById("dropZone");
-  const fileInput = document.getElementById("pdfFile");
-  const fileInfo = document.getElementById("fileInfo");
-  const fileNameDisplay = document.getElementById("fileNameDisplay");
-  const clearFileBtn = document.getElementById("clearFileBtn");
-  const previewBtn = document.getElementById("previewBtn");
-  const importBtn = document.getElementById("importBtn");
-  const progressSpinner = document.getElementById("progressSpinner");
-  const versionInput = document.getElementById("versionName");
-  const previewArea = document.getElementById("previewArea");
-  const previewCount = document.getElementById("previewCount");
-  const previewTableBody = document.getElementById("previewTableBody");
-  const importResult = document.getElementById("importResult");
-  const importResultAlert = document.getElementById("importResultAlert");
-  const historyTableBody = document.getElementById("historyTableBody");
+  const $ = (id) => document.getElementById(id);
 
-  let selectedFile = null;
-  let previewData = null;
+  const el = {
+    bamDrop: $("bamDropZone"), bamInput: $("dataFile"), bamInfo: $("bamFileInfo"),
+    bamName: $("bamFileName"), bamClear: $("bamClearBtn"),
+    bamPreview: $("bamPreviewBtn"), bamImport: $("bamImportBtn"), bamSpinner: $("bamSpinner"),
+    bamCheck: $("bamCheck"),
+    version: $("versionName"),
+    pdfDrop: $("pdfDropZone"), pdfInput: $("pdfFile"), pdfInfo: $("pdfFileInfo"),
+    pdfName: $("pdfFileName"), pdfClear: $("pdfClearBtn"),
+    verifyBtn: $("verifyBtn"), verifySpinner: $("verifySpinner"),
+    previewArea: $("previewArea"), previewCount: $("previewCount"),
+    previewBody: $("previewTableBody"),
+    verifyArea: $("verifyArea"), verifySummary: $("verifySummary"),
+    verifyDiffs: $("verifyDiffs"), verifyRegulations: $("verifyRegulations"),
+    importResult: $("importResult"), importAlert: $("importResultAlert"),
+    historyBody: $("historyTableBody"), scanBody: $("scanTableBody"),
+  };
 
-  // ── File Selection ──
+  let bamFile = null;
+  let pdfFile = null;
 
-  function selectFile(file) {
+  const esc = (v) =>
+    v === null || v === undefined ? "" : String(v)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  // ── Dateiauswahl ──────────────────────────────────────────────────
+
+  function setFile(kind, file) {
     if (!file) return;
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      alert("Bitte wählen Sie eine PDF-Datei aus.");
-      return;
-    }
-    selectedFile = file;
-    fileNameDisplay.textContent = file.name;
-    fileInfo.classList.remove("d-none");
-    previewBtn.disabled = false;
-    importBtn.disabled = false;
-    // Reset preview
-    hidePreview();
-    hideResult();
-  }
-
-  function clearFile() {
-    selectedFile = null;
-    fileInput.value = "";
-    fileInfo.classList.add("d-none");
-    fileNameDisplay.textContent = "";
-    previewBtn.disabled = true;
-    importBtn.disabled = true;
-    hidePreview();
-    hideResult();
-  }
-
-  // ── Drag & Drop ──
-
-  dropZone.addEventListener("click", () => fileInput.click());
-
-  dropZone.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dropZone.style.backgroundColor = "#e3f2fd";
-    dropZone.style.borderColor = "#0d6efd";
-  });
-
-  dropZone.addEventListener("dragleave", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dropZone.style.backgroundColor = "#f8f9fa";
-    dropZone.style.borderColor = "";
-  });
-
-  dropZone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dropZone.style.backgroundColor = "#f8f9fa";
-    dropZone.style.borderColor = "";
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      selectFile(files[0]);
-    }
-  });
-
-  fileInput.addEventListener("change", () => {
-    if (fileInput.files.length > 0) {
-      selectFile(fileInput.files[0]);
-    }
-  });
-
-  clearFileBtn.addEventListener("click", clearFile);
-
-  // ── Show/Hide Helpers ──
-
-  function showPreview() {
-    previewArea.classList.remove("d-none");
-  }
-
-  function hidePreview() {
-    previewArea.classList.add("d-none");
-    previewTableBody.innerHTML = "";
-    previewCount.textContent = "0 Einträge";
-  }
-
-  function showResult(alertClass, icon, title, message) {
-    importResult.classList.remove("d-none");
-    importResultAlert.className = "alert " + alertClass;
-    importResultAlert.innerHTML =
-      '<i class="bi ' + icon + ' fs-5 me-2"></i>' +
-      "<strong>" + title + "</strong><br>" + message;
-  }
-
-  function hideResult() {
-    importResult.classList.add("d-none");
-    importResultAlert.innerHTML = "";
-  }
-
-  function setLoading(loading) {
-    if (loading) {
-      progressSpinner.classList.remove("d-none");
-      previewBtn.disabled = true;
-      importBtn.disabled = true;
+    if (kind === "bam") {
+      bamFile = file;
+      el.bamName.textContent = file.name;
+      el.bamInfo.classList.remove("d-none");
+      el.bamPreview.disabled = false;
+      el.bamImport.disabled = false;
+      el.bamCheck.innerHTML = "";
     } else {
-      progressSpinner.classList.add("d-none");
-      previewBtn.disabled = !selectedFile;
-      importBtn.disabled = !selectedFile;
+      pdfFile = file;
+      el.pdfName.textContent = file.name;
+      el.pdfInfo.classList.remove("d-none");
+      el.verifyBtn.disabled = false;
     }
   }
 
-  // ── API Calls ──
-
-  /**
-   * Submit FormData to the given endpoint and return parsed JSON.
-   */
-  async function submitFormData(endpoint) {
-    if (!selectedFile) {
-      throw new Error("Keine Datei ausgewählt.");
+  function clearFile(kind) {
+    if (kind === "bam") {
+      bamFile = null; el.bamInput.value = "";
+      el.bamInfo.classList.add("d-none");
+      el.bamPreview.disabled = true; el.bamImport.disabled = true;
+      el.bamCheck.innerHTML = "";
+      el.previewArea.classList.add("d-none");
+    } else {
+      pdfFile = null; el.pdfInput.value = "";
+      el.pdfInfo.classList.add("d-none");
+      el.verifyBtn.disabled = true;
+      el.verifyArea.classList.add("d-none");
     }
+  }
 
-    const formData = new FormData();
-    formData.append("pdfFile", selectedFile);
-    formData.append("versionName", versionInput.value.trim() || "ADR 2025");
-
-    const response = await fetch(endpoint, {
-      method: "POST",
-      body: formData,
+  function wireDrop(zone, input, kind) {
+    zone.addEventListener("click", () => input.click());
+    ["dragenter", "dragover"].forEach((ev) =>
+      zone.addEventListener(ev, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        zone.style.backgroundColor = "#e7f1ff";
+      }));
+    ["dragleave", "drop"].forEach((ev) =>
+      zone.addEventListener(ev, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        zone.style.backgroundColor = "#f8f9fa";
+      }));
+    zone.addEventListener("drop", (e) => {
+      const f = e.dataTransfer.files[0];
+      if (f) setFile(kind, f);
     });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || "Unbekannter Fehler (" + response.status + ")");
-    }
-
-    return data;
-  }
-
-  /**
-   * Render preview table from parsed data.
-   */
-  function renderPreviewTable(entries) {
-    previewTableBody.innerHTML = "";
-
-    if (!entries || entries.length === 0) {
-      previewTableBody.innerHTML =
-        '<tr><td colspan="7" class="text-center text-muted py-4">' +
-        '<i class="bi bi-exclamation-circle me-2"></i>' +
-        "Keine Einträge erkannt. Überprüfen Sie das PDF-Format." +
-        "</td></tr>";
-      previewCount.textContent = "0 Einträge";
-      return;
-    }
-
-    previewCount.textContent = entries.length + " Einträge";
-
-    entries.forEach((entry) => {
-      const tr = document.createElement("tr");
-
-      tr.innerHTML = [
-        "<td><code>" + escapeHtml(entry.un_number || "") + "</code></td>",
-        "<td>" + escapeHtml(truncate(entry.substance_name_de || "", 60)) + "</td>",
-        "<td>" + escapeHtml(entry.hazard_class || "-") + "</td>",
-        "<td>" + escapeHtml(entry.packing_group || "-") + "</td>",
-        "<td>" + escapeHtml(String(entry.transport_category ?? "-")) + "</td>",
-        "<td><code>" + escapeHtml(entry.tunnel_code || "-") + "</code></td>",
-        "<td><small>" + escapeHtml(truncate(entry.special_provisions || "-", 40)) + "</small></td>",
-      ].join("");
-
-      previewTableBody.appendChild(tr);
+    input.addEventListener("change", () => {
+      if (input.files[0]) setFile(kind, input.files[0]);
     });
   }
 
-  // ── Preview Button ──
+  wireDrop(el.bamDrop, el.bamInput, "bam");
+  wireDrop(el.pdfDrop, el.pdfInput, "pdf");
+  el.bamClear.addEventListener("click", () => clearFile("bam"));
+  el.pdfClear.addEventListener("click", () => clearFile("pdf"));
 
-  previewBtn.addEventListener("click", async () => {
-    setLoading(true);
-    hideResult();
+  // ── Vorschau ──────────────────────────────────────────────────────
 
-    try {
-      const data = await submitFormData("/api/adr/preview");
-      previewData = data.entries || data; // Handle both wrapped and raw
-      renderPreviewTable(previewData);
-      showPreview();
-
-      // Scroll to preview
-      previewArea.scrollIntoView({ behavior: "smooth", block: "start" });
-    } catch (err) {
-      showResult(
-        "alert-danger",
-        "bi-x-circle",
-        "Fehler bei der Vorschau",
-        err.message
-      );
-    } finally {
-      setLoading(false);
+  function renderCheck(check) {
+    if (!check) { el.bamCheck.innerHTML = ""; return; }
+    const cls = check.ok ? "alert-success" : "alert-danger";
+    let html = `<div class="alert ${cls} py-2 mb-0">
+      <strong>Strukturprüfung:</strong>
+      ${check.entries} Varianten · ${check.un_numbers} UN-Nummern ·
+      ${check.with_category} mit Beförderungskategorie ·
+      ${check.with_multiplier} mit Punktfaktor`;
+    if (check.problems && check.problems.length) {
+      html += "<ul class='mb-0 mt-2'>";
+      check.problems.forEach((p) => { html += `<li>${esc(p)}</li>`; });
+      html += "</ul>";
     }
-  });
+    html += "</div>";
+    el.bamCheck.innerHTML = html;
+  }
 
-  // ── Import Button ──
+  el.bamPreview.addEventListener("click", function () {
+    if (!bamFile) return;
+    const data = new FormData();
+    data.append("dataFile", bamFile);
+    data.append("versionName", el.version.value);
 
-  importBtn.addEventListener("click", async () => {
-    if (!confirm(
-      "⚠️ Möchten Sie die Daten wirklich importieren?\n\n" +
-      "Bestehende UN-Nummern werden mit den neuen Daten überschrieben. " +
-      "Neue UN-Nummern werden hinzugefügt."
-    )) {
-      return;
-    }
+    el.bamSpinner.classList.remove("d-none");
+    fetch("/api/adr/preview", { method: "POST", body: data })
+      .then((r) => r.json())
+      .then((res) => {
+        el.bamSpinner.classList.add("d-none");
+        if (res.error) { alert(res.error); return; }
+        renderCheck(res.check);
 
-    setLoading(true);
-    hideResult();
-
-    try {
-      const data = await submitFormData("/api/adr/import");
-
-      // Show result
-      const total = (data.imported || 0) + (data.updated || 0);
-      let msg =
-        "<strong>" + total + "</strong> Einträge verarbeitet: " +
-        (data.imported || 0) + " neu importiert, " +
-        (data.updated || 0) + " aktualisiert.";
-
-      if (data.errors && data.errors.length > 0) {
-        msg +=
-          "<br><span class='text-warning'>⚠️ " +
-          data.errors.length +
-          " Fehler/Warnungen</span>";
-        if (data.errors.length <= 5) {
-          msg +=
-            "<br><small>" +
-            data.errors.join("<br>") +
-            "</small>";
-        }
-      }
-
-      const hasErrors = data.errors && data.errors.length > 0;
-      const allErrors = data.errors && data.errors.length === total && total > 0;
-
-      showResult(
-        allErrors
-          ? "alert-danger"
-          : hasErrors
-          ? "alert-warning"
-          : "alert-success",
-        allErrors
-          ? "bi-x-circle"
-          : hasErrors
-          ? "bi-exclamation-triangle"
-          : "bi-check-circle",
-        allErrors
-          ? "Import fehlgeschlagen"
-          : "Import erfolgreich",
-        msg
-      );
-
-      // Refresh history
-      loadHistory();
-
-      // Clear the file selection after successful import
-      if (!allErrors) {
-        // Don't clear file so user can re-import if needed
-      }
-    } catch (err) {
-      showResult(
-        "alert-danger",
-        "bi-x-circle",
-        "Fehler beim Import",
-        err.message
-      );
-    } finally {
-      setLoading(false);
-    }
-  });
-
-  // ── Version History ──
-
-  async function loadHistory() {
-    try {
-      const response = await fetch("/api/adr/versions");
-      const data = await response.json();
-
-      historyTableBody.innerHTML = "";
-
-      if (!data || data.length === 0) {
-        historyTableBody.innerHTML =
-          '<tr><td colspan="6" class="text-center text-muted py-3">' +
-          "Keine Import-Vorgänge vorhanden." +
-          "</td></tr>";
-        return;
-      }
-
-      data.forEach((row) => {
-        const tr = document.createElement("tr");
-
-        const importDate = row.import_date
-          ? new Date(row.import_date).toLocaleString("de-DE", {
-              day: "2-digit",
-              month: "2-digit",
-              year: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
-            })
-          : "-";
-
-        const fileName = row.file_path
-          ? row.file_path.split("/").pop().split("\\").pop()
-          : "-";
-
-        tr.innerHTML = [
-          "<td>" + row.id + "</td>",
-          "<td><span class='badge bg-primary'>" + escapeHtml(row.version) + "</span></td>",
-          "<td>" + importDate + "</td>",
-          "<td><small>" + escapeHtml(fileName) + "</small></td>",
-          "<td>" + (row.entries_imported || 0) + "</td>",
-          "<td>" + (row.entries_updated || 0) + "</td>",
-        ].join("");
-
-        historyTableBody.appendChild(tr);
+        el.previewBody.innerHTML = (res.entries || []).map((e) => `
+          <tr>
+            <td><code>${esc(e.un_number)}</code></td>
+            <td>${esc(e.variant)}</td>
+            <td>${esc(e.substance_name_de)}</td>
+            <td>${esc(e.hazard_class)}</td>
+            <td>${esc(e.classification_code)}</td>
+            <td>${esc(e.packing_group)}</td>
+            <td><strong>${esc(e.transport_category)}</strong></td>
+            <td>${esc(e.tunnel_code)}</td>
+            <td>${esc(e.limited_quantity)}</td>
+            <td>${esc(e.hazard_identification_no)}</td>
+            <td>${esc(e.multiplier)}</td>
+          </tr>`).join("");
+        el.previewCount.textContent =
+          `${res.count} Einträge` +
+          (res.shown < res.count ? ` (Vorschau: ${res.shown})` : "");
+        el.previewArea.classList.remove("d-none");
+      })
+      .catch((e) => {
+        el.bamSpinner.classList.add("d-none");
+        alert("Vorschau fehlgeschlagen: " + e);
       });
-    } catch (err) {
-      historyTableBody.innerHTML =
-        '<tr><td colspan="6" class="text-center text-danger py-3">' +
-        "Fehler beim Laden des Verlaufs: " + escapeHtml(err.message) +
-        "</td></tr>";
+  });
+
+  // ── Import ────────────────────────────────────────────────────────
+
+  el.bamImport.addEventListener("click", function () {
+    if (!bamFile) return;
+    if (!confirm("Den UN-Datenbestand aus der BAM-Datei neu aufbauen?\n\n" +
+                 "Bestehende Einträge werden aktualisiert, neue ergänzt.")) return;
+
+    const data = new FormData();
+    data.append("dataFile", bamFile);
+    data.append("versionName", el.version.value);
+
+    el.bamSpinner.classList.remove("d-none");
+    fetch("/api/adr/import", { method: "POST", body: data })
+      .then((r) => r.json().then((b) => ({ status: r.status, body: b })))
+      .then(({ status, body }) => {
+        el.bamSpinner.classList.add("d-none");
+        const ok = status < 400 && !body.error;
+        el.importAlert.className = "alert " + (ok ? "alert-success" : "alert-danger");
+        let msg = body.error
+          ? `<strong>Import abgebrochen.</strong> ${esc(body.error)}`
+          : `<strong>Import erfolgreich.</strong> ${body.imported || 0} neu, ` +
+            `${body.updated || 0} aktualisiert.`;
+        if (body.errors && body.errors.length) {
+          msg += `<br>${body.errors.length} Hinweise, z. B.: ` +
+                 esc(body.errors.slice(0, 3).join(" | "));
+        }
+        el.importAlert.innerHTML = msg;
+        el.importResult.classList.remove("d-none");
+        loadHistory();
+      })
+      .catch((e) => {
+        el.bamSpinner.classList.add("d-none");
+        alert("Import fehlgeschlagen: " + e);
+      });
+  });
+
+  // ── Verifikation ──────────────────────────────────────────────────
+
+  el.verifyBtn.addEventListener("click", function () {
+    if (!pdfFile) return;
+    const data = new FormData();
+    data.append("pdfFile", pdfFile);
+
+    el.verifySpinner.classList.remove("d-none");
+    el.verifyArea.classList.add("d-none");
+    fetch("/api/adr/verify", { method: "POST", body: data })
+      .then((r) => r.json())
+      .then((res) => {
+        el.verifySpinner.classList.add("d-none");
+        if (res.error) { alert(res.error); return; }
+        renderVerification(res.verification, res.regulations, res.regulation_error);
+        el.verifyArea.classList.remove("d-none");
+        loadScans();
+      })
+      .catch((e) => {
+        el.verifySpinner.classList.add("d-none");
+        alert("Verifikation fehlgeschlagen: " + e);
+      });
+  });
+
+  function renderVerification(v, reg, regError) {
+    const pct = (v.agreement * 100).toFixed(2);
+    const cls = v.agreement >= 0.999 ? "success"
+      : v.agreement >= 0.98 ? "warning" : "danger";
+
+    let html = `<div class="row g-3 mb-3">
+      <div class="col-md-3"><div class="card bg-light"><div class="card-body py-2">
+        <div class="text-muted small">Übereinstimmung</div>
+        <div class="fs-4 fw-bold text-${cls}">${pct} %</div></div></div></div>
+      <div class="col-md-3"><div class="card bg-light"><div class="card-body py-2">
+        <div class="text-muted small">Geprüfte UN-Nummern</div>
+        <div class="fs-4 fw-bold">${v.matched} / ${v.total_db}</div></div></div></div>
+      <div class="col-md-3"><div class="card bg-light"><div class="card-body py-2">
+        <div class="text-muted small">Abweichungen</div>
+        <div class="fs-4 fw-bold">${v.differences.length}</div></div></div></div>
+      <div class="col-md-3"><div class="card bg-light"><div class="card-body py-2">
+        <div class="text-muted small">Zeilen aus dem PDF</div>
+        <div class="fs-4 fw-bold">${v.total_pdf}</div></div></div></div>
+    </div>`;
+
+    if (v.differences.length) {
+      html += `<h6 class="mt-3">Abweichungen (bitte einzeln prüfen)</h6>
+        <div class="table-responsive" style="max-height:300px; overflow-y:auto;">
+        <table class="table table-sm table-hover">
+        <thead class="table-light"><tr>
+          <th>UN</th><th>Feld</th><th>Datenbank (BAM)</th><th>PDF</th>
+        </tr></thead><tbody>`;
+      v.differences.forEach((d) => {
+        html += `<tr><td><code>${esc(d.un_number)}</code></td>
+          <td>${esc(d.field)}</td>
+          <td>${esc(d.database)}</td><td>${esc(d.pdf)}</td></tr>`;
+      });
+      html += "</tbody></table></div>";
+    } else {
+      html += `<div class="alert alert-success py-2">
+        Keine Abweichungen — Datenbank und PDF stimmen vollständig überein.</div>`;
     }
+
+    if (v.parse_warnings && v.parse_warnings.length) {
+      html += `<div class="alert alert-warning py-2 mt-2">
+        <strong>${v.parse_warnings.length} Hinweise beim PDF-Parse:</strong>
+        <ul class="mb-0 mt-1">`;
+      v.parse_warnings.slice(0, 10).forEach((w) => {
+        html += `<li>${esc(w)}</li>`;
+      });
+      html += "</ul></div>";
+    }
+
+    el.verifySummary.innerHTML = html;
+    el.verifyDiffs.innerHTML = "";
+    renderRegulations(reg, regError);
   }
 
-  // ── Utility Functions ──
+  function renderRegulations(reg, regError) {
+    if (!reg) {
+      el.verifyRegulations.innerHTML = regError
+        ? `<div class="alert alert-warning py-2">
+             Vorschriftentexte konnten nicht gelesen werden: ${esc(regError)}</div>`
+        : "";
+      return;
+    }
 
-  function escapeHtml(text) {
-    if (text === null || text === undefined) return '';
-    const map = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
-    return String(text).replace(/[&<>"']/g, function (c) { return map[c]; });
+    let html = `<hr><h5 class="mb-3">Vorschriftentexte</h5>`;
+
+    (reg.changes || []).forEach((c) => {
+      const map = {
+        first_scan: ["info", "Erste Erfassung"],
+        changed: ["warning", "Geändert"],
+        unchanged: ["success", "Unverändert"],
+      };
+      const m = map[c.status] || ["secondary", c.status];
+      html += `<div class="alert alert-${m[0]} py-2">
+        <strong>${esc(c.section)} — ${m[1]}:</strong> ${esc(c.message)}</div>`;
+    });
+
+    Object.keys(reg.sections || {}).forEach((key) => {
+      const s = reg.sections[key];
+      const head = s.found
+        ? `<span class="badge bg-success">gefunden</span>`
+        : `<span class="badge bg-secondary">nicht enthalten</span>`;
+      let block = `<div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span><strong>${esc(s.section)}</strong> — ${esc(s.title)}</span>
+          ${head}
+        </div><div class="card-body">`;
+
+      if (s.found) {
+        block += `<p class="small text-muted mb-2">
+          Seiten ${esc((s.pages || []).join(", "))} ·
+          Prüfsumme <code>${esc(s.checksum)}</code></p>`;
+        const keys = Object.keys(s.markers || {});
+        if (keys.length) {
+          const missing = keys.filter((k) => !s.markers[k]);
+          block += `<p class="mb-2">Schlüsselwerte:
+            <span class="badge bg-success">${keys.length - missing.length} gefunden</span>
+            ${missing.length
+              ? `<span class="badge bg-danger">${missing.length} fehlend: ${esc(missing.join(", "))}</span>`
+              : ""}</p>`;
+        }
+        block += `<details><summary class="mb-2" style="cursor:pointer">
+          <strong>Wortlaut anzeigen (${s.text.length} Zeichen)</strong></summary>
+          <pre class="border rounded p-3 mb-0" style="max-height:420px; overflow:auto;
+               white-space:pre-wrap; font-size:0.8rem;">${esc(s.text)}</pre>
+          </details>`;
+      }
+      if (s.note) {
+        block += `<div class="alert alert-warning py-2 mt-2 mb-0">${esc(s.note)}</div>`;
+      }
+      block += "</div></div>";
+      html += block;
+    });
+
+    el.verifyRegulations.innerHTML = html;
   }
+
+  // ── Verläufe ──────────────────────────────────────────────────────
+
+  function loadHistory() {
+    fetch("/api/adr/versions")
+      .then((r) => r.json())
+      .then((rows) => {
+        if (!Array.isArray(rows) || !rows.length) {
+          el.historyBody.innerHTML =
+            `<tr><td colspan="6" class="text-center text-muted py-3">
+               Noch kein Import erfolgt.</td></tr>`;
+          return;
+        }
+        el.historyBody.innerHTML = rows.map((r) => `
+          <tr><td>${esc(r.id)}</td><td>${esc(r.version)}</td>
+          <td>${esc(r.import_date)}</td><td>${esc(r.file_path)}</td>
+          <td>${esc(r.entries_imported)}</td>
+          <td>${esc(r.entries_updated)}</td></tr>`).join("");
+      })
+      .catch(() => {
+        el.historyBody.innerHTML =
+          `<tr><td colspan="6" class="text-center text-muted py-3">
+             Verlauf nicht verfügbar.</td></tr>`;
+      });
+  }
+
+  function loadScans() {
+    fetch("/api/adr/scans")
+      .then((r) => r.json())
+      .then((rows) => {
+        if (!Array.isArray(rows) || !rows.length) {
+          el.scanBody.innerHTML =
+            `<tr><td colspan="4" class="text-center text-muted py-3">
+               Noch keine Prüfung erfolgt.</td></tr>`;
+          return;
+        }
+        el.scanBody.innerHTML = rows.map((r) => `
+          <tr><td><code>${esc(r.section)}</code></td>
+          <td><code>${esc(r.checksum)}</code></td>
+          <td>${esc(r.pages)}</td><td>${esc(r.scanned_at)}</td></tr>`).join("");
+      })
+      .catch(() => {
+        el.scanBody.innerHTML =
+          `<tr><td colspan="4" class="text-center text-muted py-3">
+             Nicht verfügbar.</td></tr>`;
+      });
+  }
+
+  loadHistory();
+  loadScans();
 })();

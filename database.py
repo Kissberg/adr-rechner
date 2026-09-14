@@ -39,6 +39,12 @@ DB_PATH = os.path.join(DB_DIR, "adr.db")
 # Gunicorn-Worker gleichzeitig auf dieselbe SQLite-Datei zugreifen.
 BUSY_TIMEOUT_MS = 15000
 
+# ── ADR 1.1.3.6.3 — Beförderungskategorie → Punktfaktor bzw. Höchstmenge ──
+# Kat. 4 ist «unbegrenzt»: Faktor 0 (keine Anrechnung), Höchstmenge None.
+# Kat. 0 ist niemals freigestellt: Faktor 0, Höchstmenge 0.
+FACTOR_BY_CATEGORY = {0: 0, 1: 50, 2: 3, 3: 1, 4: 0}
+MAX_QTY_BY_CATEGORY = {0: 0, 1: 20, 2: 333, 3: 1000, 4: None}
+
 
 def get_db() -> sqlite3.Connection:
     """Return a SQLite connection with row factory and WAL mode enabled."""
@@ -218,6 +224,37 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass
 
+    # ── v3.0: Volldatensatz der BAM (Datenbank GEFAHRGUT) ──
+    # Eine UN-Nummer hat in Tabelle A mehrere Varianten (Verpackungsgruppen,
+    # Spezifikationen). Die Beförderungskategorie ist variantenabhängig:
+    #   UN 1133  PG I → Kat 1 | PG II → Kat 2 | PG III → Kat 3
+    # variant = lfd. Nr. der BAM (N_LFDNR). Damit wird (un_number, variant)
+    # zum natürlichen Schlüssel — ein UPDATE nur auf un_number würde die
+    # Kategorien der Verpackungsgruppen gegenseitig überschreiben.
+    V3_UN_COLUMNS = {
+        "variant": "INTEGER",
+        "specification_de": "VARCHAR(200)",
+        "substance_name_fr": "VARCHAR(200)",
+        "classification_code": "VARCHAR(20)",
+        "limited_quantity": "VARCHAR(20)",
+        "excepted_quantity": "VARCHAR(20)",
+        "packing_instructions": "VARCHAR(200)",
+        "tank_code": "VARCHAR(30)",
+        "vehicle_for_tank": "VARCHAR(30)",
+        "hazard_identification_no": "VARCHAR(20)",
+        "multiplier": "DECIMAL(5,2)",
+        "prohibited": "VARCHAR(10)",
+        "data_source": "VARCHAR(20)",
+        "confidence": "INTEGER DEFAULT 100",
+        "verified": "BOOLEAN DEFAULT 0",
+        "notes": "TEXT",
+    }
+    for col, ddl in V3_UN_COLUMNS.items():
+        try:
+            cursor.execute(f"ALTER TABLE un_numbers ADD COLUMN {col} {ddl}")
+        except sqlite3.OperationalError:
+            pass
+
     conn.commit()
     conn.close()
 
@@ -257,31 +294,46 @@ def next_doc_number(conn: sqlite3.Connection = None) -> str:
 def seed_un_numbers() -> int:
     """
     Populate the un_numbers table with all dangerous goods from ADR 2025 Table A.
-    Loads data from the JSON seed file (extracted from official ADR 2025 PDF, Band I).
-    Returns the number of UN numbers inserted.
+
+    Datenquelle ist seit v3.0 die amtliche Datei der BAM (Datenbank GEFAHRGUT,
+    dl-de/by-2-0). Sie enthält Beförderungskategorie, Tunnelcode und den
+    Punktfaktor nach 1.1.3.6 als eigene Felder — es wird nichts mehr geraten.
+
+    Liegt keine BAM-Datei vor, wird auf das alte JSON-Seed zurückgefallen
+    (aus dem PDF geparst, unvollständig — nur als Notbehelf gedacht).
+
+    Returns the number of variants inserted.
     """
-    import json
+    bam_path = os.path.join(DB_DIR, "bam", "ADR25_csv.txt")
+    if os.path.exists(bam_path):
+        return _seed_from_bam(bam_path)
+    return _seed_from_json()
+
+
+def _clear_un_numbers(cursor) -> None:
+    """Leert die UN-Tabelle und löst dabei die Referenzen der Positionen.
+
+    shipment_items speichert alle berechnungsrelevanten Werte bereits als
+    Snapshot (un_number, transport_category, points_factor, hazard_class),
+    damit ein historisches Beförderungspapier auch nach einem Datenupdate
+    reproduzierbar bleibt. Das Lösen der Referenz ist daher unbedenklich.
+    """
+    cursor.execute("UPDATE shipment_items SET un_db_id = NULL WHERE un_db_id IS NOT NULL")
+    cursor.execute("DELETE FROM un_numbers")
+
+
+def _seed_from_bam(bam_path: str) -> int:
+    """Befüllt un_numbers aus der BAM-Datei (amtlich, dl-de/by-2-0)."""
+    from bam_import import parse_bam_file, check_entries
 
     conn = get_db()
     cursor = conn.cursor()
+    _clear_un_numbers(cursor)
 
-    # Delete existing data before seeding
-    cursor.execute("DELETE FROM un_numbers")
-
-    # ── Transport Category → Points Factor mapping ──
-    FACTOR = {0: 0, 1: 50, 2: 3, 3: 1, 4: None}  # 4 = unlimited, no 1000-point limit
-    # ── max quantity per transport unit (ADR 1.1.3.6.3) ──
-    MAX_QTY = {0: 0, 1: 20, 2: 333, 3: 1000, 4: None}
-
-    # Load seed data from JSON
-    seed_path = os.path.join(DB_DIR, "adr_2025_seed.json")
-    if not os.path.exists(seed_path):
-        print(f"WARNING: ADR seed file not found: {seed_path}")
-        conn.close()
-        return 0
-
-    with open(seed_path, "r", encoding="utf-8") as f:
-        raw_entries = json.load(f)
+    entries = parse_bam_file(bam_path, os.path.basename(bam_path))
+    check = check_entries(entries)
+    for problem in check.problems:
+        print(f"[seed] WARNUNG: {problem}")
 
     now = datetime.now().isoformat()
     inserted = 0
@@ -289,69 +341,167 @@ def seed_un_numbers() -> int:
     duplicates = 0
     incomplete = 0
 
-    for e in raw_entries:
-        un = e.get("un_number", "").strip()
+    for e in entries:
+        un = e.un_number
         if not un:
             continue
 
-        name_de = (e.get("substance_name_de") or "").strip()[:200]
-        hc = (e.get("hazard_class") or "").strip() or None
-        pg = (e.get("packing_group") or "").strip() or None
-        tunnel = (e.get("tunnel_code") or "").strip() or None
-
-        # ── Beförderungskategorie: KEIN gefährlicher Standardwert ──
-        # Fehlt die Kategorie, wird NULL gespeichert. Die Regelengine
-        # (adr_rules.py) behandelt NULL als "nicht freistellungsfähig"
-        # (Fail-Safe), anstatt stillschweigend Kategorie 3 anzunehmen.
-        try:
-            tc = int(e.get("transport_category"))
-        except (TypeError, ValueError):
-            tc = None
-        if tc not in FACTOR:
-            tc = None
-        if tc is None:
-            incomplete += 1
-
-        # ── Duplikate entfernen (gleiche UN + Klasse + VG + Kategorie) ──
-        key = (un, hc, pg, tc, tunnel)
+        # Natürlicher Schlüssel: (UN-Nummer, Variante).
+        # NICHT nur un_number — die Kategorie hängt an der Variante.
+        key = (un, e.variant)
         if key in seen:
             duplicates += 1
             continue
         seen.add(key)
 
-        mq = MAX_QTY.get(tc) if tc is not None else None
-        points_factor = FACTOR.get(tc) if tc is not None else None
+        tc = e.transport_category
+        if tc is None:
+            incomplete += 1
+
+        # Höchstmenge je Beförderungseinheit (ADR 1.1.3.6.3)
+        mq = MAX_QTY_BY_CATEGORY.get(tc) if tc is not None else None
+        # Faktor: die BAM liefert ihn mit; fehlt er, aus der Kategorie ableiten.
+        factor = e.multiplier
+        if factor is None and tc is not None:
+            factor = FACTOR_BY_CATEGORY.get(tc)
 
         # Fussnote a) zu 1.1.3.6.3: Höchstmenge 50 kg und Faktor 20 für
-        # bestimmte UN-Nummern der Beförderungskategorie 1.
+        # die UN-Nummern 0081, 0082, 0084, 0241, 0331, 0332, 0482, 1005, 1017.
         if un in FOOTNOTE_A_UN_NUMBERS:
             mq = FOOTNOTE_A_MAX_QTY
-            points_factor = FOOTNOTE_A_FACTOR
+            factor = FOOTNOTE_A_FACTOR
 
         cursor.execute(
             """INSERT INTO un_numbers
-               (un_number, substance_name_de, substance_name_en, hazard_class,
-                danger_label, packing_group, transport_category, tunnel_code,
-                special_provisions, points_factor, max_quantity_per_transport,
+               (un_number, variant, substance_name_de, specification_de,
+                substance_name_en, substance_name_fr, hazard_class,
+                classification_code, danger_label, packing_group,
+                transport_category, tunnel_code, special_provisions,
+                limited_quantity, excepted_quantity, packing_instructions,
+                tank_code, vehicle_for_tank, hazard_identification_no,
+                points_factor, multiplier, max_quantity_per_transport,
+                prohibited, data_source, confidence, notes,
                 adr_version, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ADR 2025', ?)""",
-            (un, name_de, "", hc, hc,
-             pg, tc, tunnel, None,
-             points_factor, mq, now)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (un, e.variant, e.full_name_de[:200], e.spec_de,
+             e.name_en, e.name_fr, e.hazard_class,
+             e.classification_code, e.labels, e.packing_group,
+             tc, e.tunnel_code, e.special_provisions,
+             e.limited_quantity, e.excepted_quantity, e.packing_instructions,
+             e.tank_code, e.vehicle_for_tank, e.hazard_identification_no,
+             factor, e.multiplier, mq,
+             e.prohibited, "BAM_DGG", 100, e.notes,
+             "ADR 2025", now)
         )
         inserted += 1
 
+    _ensure_unique_index(cursor)
     conn.commit()
     conn.close()
 
     if duplicates:
-        print(f"[seed] {duplicates} doppelte Einträge übersprungen.")
+        print(f"[seed] {duplicates} doppelte (UN, Variante)-Paare übersprungen.")
     if incomplete:
-        print(f"[seed] WARNUNG: {incomplete} Einträge ohne gültige "
-              f"Beförderungskategorie — diese sind nicht freistellungsfähig. "
-              f"Bitte mit der amtlichen ADR-Tabelle A abgleichen.")
-
+        print(f"[seed] HINWEIS: {incomplete} Varianten ohne Beförderungskategorie "
+              f"(z. B. nicht dem ADR unterliegende Stoffe oder "
+              f"Beförderung verboten). Diese sind nicht freistellungsfähig "
+              f"(Fail-Safe) - das ist korrekt so und kein Datenfehler.")
+    print(f"[seed] {inserted} Varianten aus BAM-Datenbank GEFAHRGUT geladen.")
     return inserted
+
+
+def _seed_from_json() -> int:
+    """Notbehelf: altes JSON-Seed (aus dem PDF geparst, unvollständig)."""
+    import json
+
+    conn = get_db()
+    cursor = conn.cursor()
+    _clear_un_numbers(cursor)
+
+    seed_path = os.path.join(DB_DIR, "adr_2025_seed.json")
+    if not os.path.exists(seed_path):
+        print(f"WARNING: weder BAM-Datei noch JSON-Seed gefunden: {seed_path}")
+        conn.close()
+        return 0
+
+    print("[seed] WARNUNG: verwende altes JSON-Seed. Für korrekte Daten bitte "
+          "die BAM-Datei unter data/bam/ ablegen oder im Import-Dialog "
+          "hochladen (Quelle: tes.bam.de, Datenbank GEFAHRGUT).")
+
+    with open(seed_path, "r", encoding="utf-8") as f:
+        raw_entries = json.load(f)
+
+    now = datetime.now().isoformat()
+    inserted = 0
+    seen = set()
+    incomplete = 0
+
+    for idx, e in enumerate(raw_entries, start=1):
+        un = e.get("un_number", "").strip()
+        if not un:
+            continue
+        key = (un, idx)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        try:
+            tc = int(e.get("transport_category"))
+        except (TypeError, ValueError):
+            tc = None
+        if tc not in FACTOR_BY_CATEGORY:
+            tc = None
+            incomplete += 1
+
+        mq = MAX_QTY_BY_CATEGORY.get(tc) if tc is not None else None
+        factor = FACTOR_BY_CATEGORY.get(tc) if tc is not None else None
+        if un in FOOTNOTE_A_UN_NUMBERS:
+            mq = FOOTNOTE_A_MAX_QTY
+            factor = FOOTNOTE_A_FACTOR
+
+        hc = (e.get("hazard_class") or "").strip() or None
+        cursor.execute(
+            """INSERT INTO un_numbers
+               (un_number, variant, substance_name_de, hazard_class,
+                danger_label, packing_group, transport_category, tunnel_code,
+                points_factor, max_quantity_per_transport, data_source,
+                confidence, adr_version, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (un, idx, (e.get("substance_name_de") or "").strip()[:200], hc, hc,
+             (e.get("packing_group") or "").strip() or None,
+             tc, (e.get("tunnel_code") or "").strip() or None,
+             factor, mq, "PDF_LEGACY", 60, "ADR 2025", now)
+        )
+        inserted += 1
+
+    _ensure_unique_index(cursor)
+    conn.commit()
+    conn.close()
+    return inserted
+
+
+def _ensure_unique_index(cursor) -> None:
+    """Erzwingt die Eindeutigkeit von (un_number, variant).
+
+    Ohne diesen Index kann ein UPDATE auf un_number allein die Varianten
+    einer UN-Nummer überschreiben. Altdaten werden vorher bereinigt.
+    """
+    try:
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_un_variant "
+            "ON un_numbers(un_number, variant)"
+        )
+    except sqlite3.IntegrityError:
+        # Altdaten mit doppelten Paaren: Duplikate entfernen
+        cursor.execute("""
+            DELETE FROM un_numbers WHERE id NOT IN (
+                SELECT MIN(id) FROM un_numbers GROUP BY un_number, variant
+            )
+        """)
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_un_variant "
+            "ON un_numbers(un_number, variant)"
+        )
 
 
 
@@ -397,11 +547,19 @@ if __name__ == "__main__":
     print("\nVerteilung der Transportkategorien:")
     for row in cat:
         cat_num, count = row[0], row[1]
-        factor_map = {0: "0", 1: "50", 2: "3", 3: "1", 4: "unbegrenzt"}
-        print(f"  Kategorie {cat_num} (Faktor {factor_map[cat_num]}): {count} Einträge")
+        factor_map = {0: "0", 1: "50", 2: "3", 3: "1", 4: "0 (unbegrenzt)"}
+        label = factor_map.get(cat_num, "-")
+        name = "ohne Kategorie" if cat_num is None else f"Kategorie {cat_num}"
+        print(f"  {name} (Faktor {label}): {count} Einträge")
 
     total = conn.execute("SELECT COUNT(*) FROM un_numbers").fetchone()[0]
-    print(f"\nGesamt: {total} UN-Nummern in der Datenbank")
+    distinct = conn.execute("SELECT COUNT(DISTINCT un_number) FROM un_numbers").fetchone()[0]
+    print(f"\nGesamt: {total} Varianten / {distinct} UN-Nummern in der Datenbank")
+
+    src = conn.execute(
+        "SELECT data_source, COUNT(*) FROM un_numbers GROUP BY data_source"
+    ).fetchall()
+    print("Datenquelle:", ", ".join(f"{r[0] or 'unbekannt'}={r[1]}" for r in src))
 
     addr = conn.execute("SELECT * FROM shipping_addresses").fetchall()
     print(f"\nVersandadressen ({len(addr)}):")

@@ -40,6 +40,101 @@ der Version 1.x. **Wer 1.x produktiv einsetzt, sollte umgehend aktualisieren.**
 
 ---
 
+## ⚠️ Wichtiges Update — Version 3.0: Datenquelle und Variantenlogik
+
+Version 3.0 ersetzt die Datenbasis und korrigiert einen Fehler, der zu
+**falschen Punktzahlen** führen konnte.
+
+### Warum: das PDF ist als Datenquelle ungeeignet
+
+Tabelle A (Kapitel 3.2) ist eine 20-spaltige Tabelle, die über zwei
+gegenüberliegende Seiten läuft. Wird sie als Text gelesen, gehen die
+Spaltengrenzen verloren. Die Beförderungskategorie musste deshalb geschätzt
+werden — und wenn nichts gefunden wurde, wurde ersatzweise **Kategorie 3**
+angenommen. Bei einer Freistellungsentscheidung nach ADR 1.1.3.6 ist das
+ein untragbares Risiko.
+
+### Was sich ändert
+
+| | bis 2.x | ab 3.0 |
+|---|---|---|
+| Datenquelle | ADR-PDF, heuristisch geparst | **amtliche BAM-Datei** (Datenbank GEFAHRGUT), strukturiert |
+| Beförderungskategorie | geschätzt, Default Kat. 3 | eigenes Feld der BAM — **nichts wird geraten** |
+| Punktfaktor | aus der Kategorie abgeleitet | von der BAM mitgeliefert (`N_MULTIPLIKATOR`) |
+| Varianten | `UPDATE … WHERE un_number = ?` | Schlüssel ist **(UN-Nummer, Variante)** |
+| ADR-PDF | Datenquelle | **nur Verifikation und Änderungsaufsicht** |
+| Zusätzliche Felder | — | LQ, EQ, Kemler-Zahl, Klassifizierungscode, Tankcode, Gefahrzettel |
+
+### Der Variantenfehler
+
+Eine UN-Nummer hat in Tabelle A mehrere Varianten, und die
+Beförderungskategorie hängt an der Verpackungsgruppe:
+
+```
+UN 1133 KLEBSTOFFE    PG I → Kat 1 (Faktor 50)
+                      PG II → Kat 2 (Faktor 3)
+                      PG III → Kat 3 (Faktor 1)
+```
+
+Insgesamt betrifft das **354 UN-Nummern**. Ein Update nur auf die UN-Nummer
+überschreibt diese Werte gegenseitig — es würde beispielsweise für alle drei
+Verpackungsgruppen Kategorie 3 stehen. Seit 3.0 ist `(un_number, variant)`
+der natürliche Schlüssel, abgesichert durch einen eindeutigen Index.
+
+### Qualität der Datenbasis
+
+Abgleich der neuen BAM-Daten gegen den bisherigen Bestand (ADR 2025):
+
+- **223 Abweichungen** behoben (Gefahrklasse 89, Verpackungsgruppe 86,
+  Beförderungskategorie 42, Tunnelcode 5, ein Datensatz ohne UN-Nummer)
+- Gegenprobe durch einen unabhängigen Parse des ADR-PDF:
+  **2.346 von 2.347 UN-Nummern stimmen überein (99,96 %)** — die einzige
+  Abweichung ist UN 3316, deren Spalte (15) «siehe SV 671 (E)» lautet und
+  nicht maschinell auflösbar ist.
+
+### Datenquelle und Lizenzpflicht
+
+Die Daten stammen aus der **Datenbank GEFAHRGUT (DGG)** der
+Bundesanstalt für Materialforschung und -prüfung (BAM) und stehen unter der
+*Datenlizenz Deutschland – Namensnennung – Version 2.0* (`dl-de/by-2-0`).
+Sie sind seit dem 23.07.2025 kostenfrei und dürfen auch kommerziell
+genutzt werden. **Die Quellenangabe ist Lizenzpflicht** und wird in der
+Anwendung ausgegeben:
+
+```
+Source: Bundesanstalt für Materialforschung und -prüfung (BAM) –
+Datenbank GEFAHRGUT – URL: tes.bam.de/TES/Navigation/EN/DGG-Database/
+dgg-database.html — Data licence Germany – attribution – Version 2.0
+```
+
+> ⚠️ **Zwei Einschränkungen der BAM-Lizenz:**
+> 1. Die BAM untersagt gemäß § 44b (3) UrhG die Nutzung der Daten für
+>    **Text- und Data-Mining**. Die Verwendung als Nachschlagetabelle in
+>    dieser Anwendung ist zulässig; das Training von Modellen mit diesen
+>    Daten benötigt die schriftliche Zustimmung der BAM.
+> 2. Die BAM übernimmt **keine Gewähr** für Richtigkeit und Vollständigkeit.
+>    Eine Freistellungsentscheidung ist daher stets fachlich zu prüfen.
+
+### Import und Verifikation in der Anwendung
+
+Unter **„Daten & Verifikation“** werden beide Dateien hochgeladen:
+
+1. **BAM-Datei** (`ADR25.xlsx` oder `ADR25_csv.txt`) — wird importiert und
+   bildet den Datenbestand. Vor dem Import prüft eine Strukturprüfung die
+   Datei; bei Auffälligkeiten wird abgebrochen.
+2. **ADR-PDF** — schreibt **nicht** in die Datenbank. Es liefert
+   - einen Abgleich des eigenen PDF-Parse gegen den Datenbestand
+   - den Wortlaut von **1.1.3.6** (1000-Punkte-Regel) und **5.4.1.1**
+     (Beförderungspapier) samt Prüfsumme, damit Textänderungen
+     zwischen zwei ADR-Ausgaben auffallen.
+
+> **Hinweis:** ADR wird zweibändig veröffentlicht. Band 1 enthält die Teile
+> 1–3 (dort liegt 1.1.3.6), Band 2 die Teile 4–9 (dort liegt 5.4.1.1).
+> Fehlt ein Abschnitt in der hochgeladenen Datei, wird das ausdrücklich
+> gemeldet — es wird kein „nichts gefunden“ vorgetäuscht.
+
+---
+
 ## Funktionen
 
 - 🔢 **1000-Punkte-Berechnung** — Gesamtpunktzahl nach ADR 1.1.3.6: ∑(Menge × Faktor) pro Transportkategorie

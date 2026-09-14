@@ -19,7 +19,13 @@ from flask import (
 )
 from database import get_db, init_db, seed_un_numbers, next_doc_number
 from befoerderungspapier import generate_befoerderungspapier
-from adr_import import parse_adr_pdf, import_adr_data, get_version_history
+from adr_import import (
+    import_bam_data,
+    get_version_history,
+    get_last_scan_history,
+    scan_regulation_sections,
+)
+from bam_import import parse_bam_file, check_entries, attribution
 from adr_rules import (
     evaluate_transport,
     TRANSPORT_FORM_LABELS,
@@ -600,88 +606,184 @@ def api_audit_log():
     return jsonify([dict(r) for r in rows])
 
 
-# ── ADR PDF Import API ─────────────────────────────────────────────────
+# ── ADR Daten-API ──────────────────────────────────────────────────────
+#
+# Seit v3.0 gilt eine klare Trennung:
+#   • Datenquelle ist die amtliche BAM-Datei (Datenbank GEFAHRGUT).
+#     Sie wird importiert — hier entsteht der Datenbestand.
+#   • Das ADR-PDF dient ausschließlich der Verifikation und der
+#     Änderungsaufsicht über die Vorschriftentexte (1.1.3.6, 5.4.1.1).
+#     Es schreibt niemals in die Datenbank.
+#
+# Grund: Tabelle A ist eine 20-spaltige Tabelle auf Doppelseiten. Ein
+# textbasierter Parse verliert die Spaltengrenzen, die Beförderungskategorie
+# müsste geraten werden. Die BAM liefert sie als eigenes Feld.
+
+ALLOWED_DATA_EXT = (".xlsx", ".xlsm", ".csv", ".txt", ".tsv")
+
+
+def _read_upload(field: str, allowed_ext):
+    """Liest eine hochgeladene Datei; liefert (FileStorage, None) oder (None, Fehler)."""
+    if field not in request.files:
+        return None, "Keine Datei hochgeladen"
+    file = request.files[field]
+    if not file.filename:
+        return None, "Keine Datei ausgewählt"
+    if not file.filename.lower().endswith(tuple(allowed_ext)):
+        return None, ("Unerwartetes Dateiformat. Erlaubt für Daten: "
+                      + ", ".join(allowed_ext))
+    return file, None
+
 
 @app.route("/api/adr/preview", methods=["POST"])
 def adr_preview():
-    """Parse ADR PDF without saving — return preview data."""
-    if "pdfFile" not in request.files:
-        return jsonify({"error": "Keine PDF-Datei hochgeladen"}), 400
-
-    pdf_file = request.files["pdfFile"]
-    if not pdf_file.filename:
-        return jsonify({"error": "Keine Datei ausgewählt"}), 400
-
-    if not pdf_file.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "Nur PDF-Dateien werden unterstützt"}), 400
+    """BAM-Datei einlesen, ohne zu speichern — Vorschau und Prüfung."""
+    data_file, err = _read_upload("dataFile", ALLOWED_DATA_EXT)
+    if err:
+        return jsonify({"error": err}), 400
 
     version_name = request.form.get("versionName", "ADR 2025").strip()
 
     try:
-        entries = parse_adr_pdf(pdf_file, version_name)
+        entries = parse_bam_file(data_file, data_file.filename)
+    except ValueError as e:
+        return jsonify({"error": f"Datei nicht lesbar: {e}"}), 400
     except Exception as e:
-        return jsonify({
-            "error": f"Fehler beim Parsen der PDF-Datei: {e}"
-        }), 400
+        return jsonify({"error": f"Fehler beim Einlesen: {e}"}), 400
 
     if not entries:
         return jsonify({
-            "error": "Keine UN-Nummern in der PDF erkannt. "
-                     "Stellen Sie sicher, dass es sich um eine ADR Chapter 3.2 Table A PDF handelt.",
+            "error": "Keine UN-Nummern erkannt. Erwartet wird die BAM-Datei "
+                     "«ADR25.xlsx» bzw. «ADR25_csv.txt» (Datenbank GEFAHRGUT).",
             "entries": [],
         }), 200
 
+    check = check_entries(entries)
     return jsonify({
-        "entries": entries,
+        "entries": [
+            {
+                "un_number": e.un_number,
+                "variant": e.variant,
+                "substance_name_de": e.full_name_de,
+                "hazard_class": e.hazard_class,
+                "classification_code": e.classification_code,
+                "packing_group": e.packing_group,
+                "transport_category": e.transport_category,
+                "tunnel_code": e.tunnel_code,
+                "limited_quantity": e.limited_quantity,
+                "hazard_identification_no": e.hazard_identification_no,
+                "multiplier": e.multiplier,
+            }
+            for e in entries[:500]  # Vorschau begrenzen, nicht den Speicher
+        ],
         "count": len(entries),
+        "shown": min(len(entries), 500),
         "version": version_name,
+        "check": check.as_dict(),
+        "attribution": attribution(),
     })
 
 
 @app.route("/api/adr/import", methods=["POST"])
 def adr_import():
-    """Parse ADR PDF and save to database (nur Administratoren)."""
+    """BAM-Datei in die Datenbank übernehmen (nur Administratoren)."""
     user = current_user()
     if user and user.get("role") != ROLE_ADMIN:
         return jsonify({"error": "Keine Berechtigung"}), 403
 
-    if "pdfFile" not in request.files:
-        return jsonify({"error": "Keine PDF-Datei hochgeladen"}), 400
-
-    pdf_file = request.files["pdfFile"]
-    if not pdf_file.filename:
-        return jsonify({"error": "Keine Datei ausgewählt"}), 400
-
-    if not pdf_file.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "Nur PDF-Dateien werden unterstützt"}), 400
+    data_file, err = _read_upload("dataFile", ALLOWED_DATA_EXT)
+    if err:
+        return jsonify({"error": err}), 400
 
     version_name = request.form.get("versionName", "ADR 2025").strip()
 
     try:
-        entries = parse_adr_pdf(pdf_file, version_name)
+        entries = parse_bam_file(data_file, data_file.filename)
+    except ValueError as e:
+        return jsonify({"error": f"Datei nicht lesbar: {e}"}), 400
     except Exception as e:
-        return jsonify({
-            "error": f"Fehler beim Parsen der PDF-Datei: {e}"
-        }), 400
+        return jsonify({"error": f"Fehler beim Einlesen: {e}"}), 400
 
     if not entries:
+        return jsonify({"error": "Keine UN-Nummern erkannt — Import abgebrochen."}), 400
+
+    check = check_entries(entries)
+    if not check.ok:
         return jsonify({
-            "error": "Keine UN-Nummern in der PDF erkannt. "
-                     "Import wurde abgebrochen.",
+            "error": "Die Datei hat die Strukturprüfung nicht bestanden. "
+                     "Import abgebrochen, damit kein fehlerhafter "
+                     "Datenbestand entsteht.",
+            "check": check.as_dict(),
         }), 400
 
-    # Save to database
-    file_path = pdf_file.filename
-    result = import_adr_data(entries, version_name, file_path)
+    result = import_bam_data(entries, version_name, data_file.filename)
+    result["check"] = check.as_dict()
+    result["attribution"] = attribution()
 
     audit.log(
         audit.IMPORT, "adr_version", None,
-        f"ADR-Import '{version_name}' aus {file_path}: "
-        f"{result.get('entries_imported', 0)} neu, "
-        f"{result.get('entries_updated', 0)} aktualisiert"
+        f"ADR-Import '{version_name}' aus BAM-Datei {data_file.filename}: "
+        f"{result.get('imported', 0)} neu, "
+        f"{result.get('updated', 0)} aktualisiert"
     )
 
     return jsonify(result), 201
+
+
+@app.route("/api/adr/verify", methods=["POST"])
+def adr_verify():
+    """ADR-PDF gegen den Datenbestand prüfen und Vorschriftentexte lesen.
+
+    Das PDF schreibt nichts in die Datenbank. Es liefert:
+      1. Abweichungen zwischen eigenem PDF-Parse und Datenbank
+      2. Den Wortlaut von 1.1.3.6 und 5.4.1.1 samt Änderungshinweis
+    """
+    pdf_file, err = _read_upload("pdfFile", (".pdf",))
+    if err:
+        return jsonify({"error": err}), 400
+
+    try:
+        from adr_import import _open_pdf, parse_table_a, verify_against_database
+
+        doc, _ = _open_pdf(pdf_file)
+        try:
+            entries, warnings = parse_table_a(doc)
+        finally:
+            doc.close()
+
+        if not entries:
+            return jsonify({
+                "error": "Tabelle A wurde in diesem PDF nicht gefunden. "
+                         "Die Verifikation benötigt das Kapitel 3.2.",
+            }), 400
+
+        verification = verify_against_database(entries, warnings).as_dict()
+    except Exception as e:
+        return jsonify({"error": f"Fehler beim PDF-Parse: {e}"}), 400
+
+    # Dieselbe Datei nochmals öffnen — der Stream wurde oben verbraucht.
+    regulations = None
+    regulation_error = None
+    try:
+        pdf_file.seek(0)
+        regulations = scan_regulation_sections(pdf_file)
+    except Exception as e:
+        regulation_error = str(e)
+
+    return jsonify({
+        "verification": verification,
+        "regulations": regulations,
+        "regulation_error": regulation_error,
+    })
+
+
+@app.route("/api/adr/scans", methods=["GET"])
+def adr_scans():
+    """Verlauf der Vorschriftenprüfungen (Prüfsummen je Abschnitt)."""
+    try:
+        return jsonify(get_last_scan_history())
+    except Exception as e:
+        return jsonify({"error": f"Fehler beim Abrufen: {e}"}), 500
 
 
 @app.route("/api/adr/versions", methods=["GET"])
