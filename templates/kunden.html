@@ -206,5 +206,8 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script>
+window.CURRENT_USER_ROLE = "{{ current_user.role if current_user else '' }}";
+</script>
 <script src="{{ url_for('static', filename='js/kunden.js') }}"></script>
 {% endblock %}

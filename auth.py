@@ -37,6 +37,7 @@ statt eines zu erzeugen.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -52,6 +53,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 # Datenverzeichnisses kann zur Laufzeit abweichen (Tests, anderer Mount),
 # und eine beim Import kopierte Konstante würde das nicht mitbekommen.
 import database
+import audit
 from database import get_db
 
 ROLE_ADMIN = "admin"
@@ -60,9 +62,124 @@ VALID_ROLES = (ROLE_ADMIN, ROLE_USER)
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 
+# Benutzerverwaltung liegt bewusst auf einem eigenen Blueprint ohne Präfix:
+# die JSON-Schnittstelle gehört unter /api/users, nicht unter /auth/api/users.
+users_bp = Blueprint("users", __name__)
+
 # Datei für ein erzeugtes Anfangspasswort. Bewusst im Datenverzeichnis,
 # damit sie im Docker-Volume liegt und nicht im Image landet.
 ADMIN_PASSWORD_FILENAME = ".admin_password"
+
+# ─────────────────────────────────────────────────────────────────────
+# Passwortrichtlinie
+# ─────────────────────────────────────────────────────────────────────
+# Bewusst längenorientiert statt komplexitätsorientiert: BSI (TR-02102-1)
+# und NIST (SP 800-63B) empfehlen beide Länge als wirksames Kriterium und
+# raten von erzwungenen Zeichenklassen ab — sie führen nachweislich zu
+# „Passwort1!"-Mustern und Zetteln am Monitor. Was tatsächlich hilft, ist
+# eine Mindestlänge, der Ausschluss des Benutzernamens und eine Sperrliste
+# der häufigsten Passwörter.
+PASSWORD_MIN_LENGTH = int(os.environ.get("ADR_PASSWORD_MIN_LENGTH", "12"))
+
+# Nur für den unwahrscheinlichen Fall, dass ein Betrieb kürzere Passwörter
+# zulassen will — dann aber bewusst und dokumentiert.
+if PASSWORD_MIN_LENGTH < 8:
+    PASSWORD_MIN_LENGTH = 8
+
+# Häufigste Passwörter (Auszug gängiger Leak-Listen). Reine Längenprüfung
+# würde „passwort1234" durchlassen.
+_WEAK_PASSWORDS = {
+    "passwort", "password", "passwort123", "passwort1234", "password123",
+    "passwort2024", "passwort2025", "passwort2026", "adr2025", "adr2026",
+    "administrator", "admin123", "admin1234", "willkommen", "willkommen1",
+    "qwertzuiop", "qwerty123456", "1234567890", "12345678901", "123456789012",
+    "geheim123456", "iloveyou123", "sommer2026", "Winter2026!", "letmein123",
+}
+
+
+def validate_password(password: str, username: str = "") -> Optional[str]:
+    """Prüft ein neues Passwort. Gibt eine Fehlermeldung zurück oder None.
+
+    Wird an allen Stellen verwendet, an denen ein Passwort gesetzt wird —
+    auch beim Zurücksetzen durch einen Administrator und beim Anlegen des
+    ersten Kontos. Ein ungeprüfter Pfad wäre eine Hintertür an der
+    Richtlinie vorbei.
+    """
+    if not password:
+        return "Das Passwort darf nicht leer sein."
+    if len(password) < PASSWORD_MIN_LENGTH:
+        return (f"Das Passwort muss mindestens {PASSWORD_MIN_LENGTH} Zeichen "
+                f"lang sein.")
+    if password.lower() in _WEAK_PASSWORDS:
+        return ("Dieses Passwort steht in gängigen Leak-Listen. Bitte ein "
+                "anderes wählen.")
+    if username and username.lower() in password.lower():
+        return "Das Passwort darf den Benutzernamen nicht enthalten."
+    if len(set(password)) < 5:
+        return ("Das Passwort ist zu gleichförmig. Bitte mehr unterschiedliche "
+                "Zeichen verwenden.")
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Schutz gegen Passwortraten
+# ─────────────────────────────────────────────────────────────────────
+MAX_LOGIN_ATTEMPTS = int(os.environ.get("ADR_MAX_LOGIN_ATTEMPTS", "10"))
+LOGIN_LOCKOUT_MINUTES = int(os.environ.get("ADR_LOGIN_LOCKOUT_MINUTES", "15"))
+
+
+def count_recent_failures(username: str, ip: Optional[str] = None) -> int:
+    """Fehlversuche für diesen Benutzernamen im Sperrfenster.
+
+    Gezählt wird über den Benutzernamen (nicht die IP), damit ein Angreifer
+    das Limit nicht durch Wechsel der Quell-IP umgeht. Die IP wird zusätzlich
+    gespeichert, um den Vorfall später auswerten zu können.
+    """
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM login_attempts "
+            "WHERE username = ? AND attempted_at >= datetime('now', ?)",
+            (username.strip().lower(), f"-{LOGIN_LOCKOUT_MINUTES} minutes"),
+        ).fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def is_locked_out(username: str) -> bool:
+    return count_recent_failures(username) >= MAX_LOGIN_ATTEMPTS
+
+
+def record_failed_attempt(username: str, ip: Optional[str] = None) -> int:
+    """Vermerkt einen Fehlversuch und räumt alte Einträge gleich mit auf."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO login_attempts (username, ip_address) VALUES (?, ?)",
+            (username.strip().lower(), ip or ""),
+        )
+        # Alles außerhalb des Sperrfensters ist für die Zählung irrelevant
+        # und wird entfernt, damit die Tabelle nicht unbegrenzt wächst.
+        conn.execute(
+            "DELETE FROM login_attempts WHERE attempted_at < datetime('now', ?)",
+            (f"-{max(LOGIN_LOCKOUT_MINUTES, 1) * 24} minutes",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return count_recent_failures(username)
+
+
+def clear_failed_attempts(username: str) -> None:
+    """Nach erfolgreicher Anmeldung den Zähler zurücksetzen."""
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM login_attempts WHERE username = ?",
+                     (username.strip().lower(),))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def auth_enabled() -> bool:
@@ -211,6 +328,26 @@ def ensure_default_admin() -> None:
         password = secrets.token_urlsafe(16)
         generated = True
 
+    # Ein vorgegebenes Passwort wird nur geprüft, wenn wirklich ein Konto
+    # entsteht. Bei bestehender Datenbank legt die Funktion nichts an — eine
+    # Prüfung könnte dort ein Upgrade blockieren, obwohl der Wert gar nicht
+    # verwendet wird.
+    if not generated:
+        conn = get_db()
+        try:
+            vorhanden = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        finally:
+            conn.close()
+        if not vorhanden:
+            problem = validate_password(password, username)
+            if problem:
+                raise RuntimeError(
+                    "ADR_ADMIN_PASSWORD erfüllt die Passwortrichtlinie nicht "
+                    f"({problem}) Start verweigert. Bitte ein längeres, "
+                    "einmaliges Passwort setzen — oder ADR_ADMIN_PASSWORD "
+                    "weglassen, dann wird eines erzeugt."
+                )
+
     # Passwort zuerst sichern: kann die Datei nicht geschrieben werden,
     # darf der Benutzer nicht angelegt werden — sonst entstünde ein Konto,
     # dessen Passwort niemand kennt.
@@ -230,11 +367,19 @@ def ensure_default_admin() -> None:
 
     conn = get_db()
     try:
+        # Ein erzeugtes Passwort liegt bis zur ersten Änderung in einer Datei
+        # auf der Platte. Deshalb muss es beim ersten Anmelden ersetzt
+        # werden — danach ist die Datei wertlos und wird gelöscht.
+        # Ein vom Betreiber gesetztes Passwort kennt nur er; dort ist keine
+        # erzwungene Änderung nötig.
         cur = conn.execute(
-            "INSERT OR IGNORE INTO users (username, password_hash, role, active, created_at) "
-            "VALUES (?, ?, ?, 1, ?)",
+            "INSERT OR IGNORE INTO users (username, password_hash, role, active, "
+            "must_change_password, created_at, created_by) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?)",
             (username, generate_password_hash(password), ROLE_ADMIN,
-             datetime.now().isoformat(timespec="seconds")),
+             1 if generated else 0,
+             datetime.now().isoformat(timespec="seconds"),
+             "Umgebungsvariable" if not generated else "System"),
         )
         conn.commit()
         created = (cur.rowcount or 0) > 0
@@ -370,20 +515,36 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "")
         password = request.form.get("password", "")
-        user = verify_credentials(username, password)
-        if user is None:
-            error = "Benutzername oder Passwort ungültig."
+
+        # Vor der Prüfung sperren: sonst wären die letzten Versuche bis zum
+        # Limit noch verwertbar.
+        if username and is_locked_out(username):
+            error = ("Zu viele Fehlversuche. Das Konto ist für "
+                     f"{LOGIN_LOCKOUT_MINUTES} Minuten gesperrt.")
         else:
-            session.clear()
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-            session["role"] = user["role"]
-            session.permanent = False
-            nxt = request.args.get("next") or url_for("index")
-            # Offene Redirects verhindern
-            if not nxt.startswith("/"):
-                nxt = url_for("index")
-            return redirect(nxt)
+            user = verify_credentials(username, password)
+            if user is None:
+                # Die Meldung nennt bewusst nicht, ob der Benutzername
+                # existiert — sonst lassen sich gültige Konten aufzählen.
+                error = "Benutzername oder Passwort ungültig."
+                if username:
+                    record_failed_attempt(username, request.remote_addr)
+            else:
+                clear_failed_attempts(username)
+                session.clear()
+                session["user_id"] = user["id"]
+                session["username"] = user["username"]
+                session["role"] = user["role"]
+                session.permanent = False
+                # Von einem Administrator vergebenes Passwort: erst ändern,
+                # dann weiterarbeiten.
+                if user["must_change_password"]:
+                    return redirect(url_for("auth.password_page", next="1"))
+                nxt = request.args.get("next") or url_for("index")
+                # Offene Redirects verhindern
+                if not nxt.startswith("/"):
+                    nxt = url_for("index")
+                return redirect(nxt)
 
     return render_template("login.html", title="Anmeldung", error=error)
 
@@ -395,6 +556,18 @@ def logout():
     return redirect(url_for("auth.login"))
 
 
+@auth_bp.route("/passwort-aendern")
+@login_required
+def password_page():
+    """Seite zum Ändern des eigenen Passworts."""
+    user = current_user()
+    return render_template(
+        "password_change.html",
+        title="Passwort ändern",
+        forced=bool(user and user["must_change_password"]),
+    )
+
+
 @auth_bp.route("/password", methods=["POST"])
 @login_required
 def change_password():
@@ -404,9 +577,13 @@ def change_password():
     data = request.get_json(force=True, silent=True) or {}
     old = data.get("old_password", "")
     new = data.get("new_password", "")
+    confirm = data.get("confirm_password", "")
 
-    if len(new) < 10:
-        return jsonify({"error": "Das neue Passwort muss mindestens 10 Zeichen lang sein."}), 400
+    problem = validate_password(new, user["username"])
+    if problem:
+        return jsonify({"error": problem}), 400
+    if confirm and new != confirm:
+        return jsonify({"error": "Die Passwortwiederholung stimmt nicht überein."}), 400
 
     conn = get_db()
     try:
@@ -415,14 +592,285 @@ def change_password():
             return jsonify({"error": "Benutzer nicht gefunden"}), 404
         if not check_password_hash(row["password_hash"], old):
             return jsonify({"error": "Aktuelles Passwort ist falsch."}), 403
-        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?",
-                     (generate_password_hash(new), user["id"]))
+        if check_password_hash(row["password_hash"], new):
+            return jsonify({"error": "Das neue Passwort entspricht dem "
+                                     "bisherigen. Bitte ein anderes wählen."}), 400
+        conn.execute(
+            "UPDATE users SET password_hash = ?, must_change_password = 0, "
+            "password_changed_at = ? WHERE id = ?",
+            (generate_password_hash(new),
+             datetime.now().isoformat(timespec="seconds"), user["id"]),
+        )
         conn.commit()
     finally:
         conn.close()
+
+    session["must_change_password"] = False
 
     # Eine Datei mit dem erzeugten Anfangspasswort ist damit wertlos
     # geworden — sie wird entfernt, damit sie nicht liegen bleibt.
     delete_admin_password_file()
 
     return jsonify({"ok": True})
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Benutzerverwaltung (nur Administratoren)
+# ─────────────────────────────────────────────────────────────────────
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
+
+
+def _user_public_dict(row) -> dict:
+    """Benutzerdatensatz ohne Passwort-Hash für die Ausgabe."""
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "role": row["role"],
+        "active": bool(row["active"]),
+        "must_change_password": bool(row["must_change_password"]),
+        "created_at": row["created_at"],
+        "created_by": row["created_by"],
+        "last_login": row["last_login"],
+        "password_changed_at": row["password_changed_at"],
+        "is_self": False,
+    }
+
+
+def _active_admin_count(exclude_id: Optional[int] = None) -> int:
+    conn = get_db()
+    try:
+        sql = ("SELECT COUNT(*) FROM users WHERE role = ? AND active = 1")
+        params = [ROLE_ADMIN]
+        if exclude_id is not None:
+            sql += " AND id != ?"
+            params.append(exclude_id)
+        return int(conn.execute(sql, params).fetchone()[0])
+    finally:
+        conn.close()
+
+
+@users_bp.route("/benutzer")
+@login_required
+@role_required(ROLE_ADMIN)
+def users_page():
+    """Benutzerverwaltung."""
+    return render_template("benutzer.html", title="Benutzerverwaltung")
+
+
+@users_bp.route("/api/users", methods=["GET"])
+@login_required
+@role_required(ROLE_ADMIN)
+def api_users_list():
+    from flask import jsonify
+    me = current_user()
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM users ORDER BY active DESC, username COLLATE NOCASE"
+        ).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        d = _user_public_dict(r)
+        d["is_self"] = (r["id"] == me["id"])
+        out.append(d)
+    return jsonify({"users": out, "min_password_length": PASSWORD_MIN_LENGTH})
+
+
+@users_bp.route("/api/users", methods=["POST"])
+@login_required
+@role_required(ROLE_ADMIN)
+def api_users_create():
+    """Legt ein Benutzerkonto an.
+
+    Ohne Passwort im Request wird eines erzeugt und **einmalig in der
+    Antwort** zurückgegeben — nicht im Log. Der Administrator übergibt es
+    der Person, die es beim ersten Anmelden ohnehin ersetzen muss.
+    """
+    from flask import jsonify
+    me = current_user()
+    data = request.get_json(force=True, silent=True) or {}
+
+    username = (data.get("username") or "").strip()
+    role = (data.get("role") or ROLE_USER).strip()
+    password = data.get("password") or ""
+    generated = False
+
+    if not USERNAME_PATTERN.match(username):
+        return jsonify({"error": "Der Benutzername muss 3–64 Zeichen lang sein "
+                                 "und darf nur Buchstaben, Ziffern, Punkt, "
+                                 "Bindestrich und Unterstrich enthalten."}), 400
+    if role not in VALID_ROLES:
+        return jsonify({"error": f"Unbekannte Rolle: {role}"}), 400
+
+    if not password:
+        password = secrets.token_urlsafe(12)
+        generated = True
+    else:
+        problem = validate_password(password, username)
+        if problem:
+            return jsonify({"error": problem}), 400
+
+    conn = get_db()
+    try:
+        existing = conn.execute("SELECT id, active FROM users WHERE username = ?",
+                                (username,)).fetchone()
+        if existing:
+            if existing["active"]:
+                return jsonify({"error": f"Der Benutzer „{username}” existiert "
+                                         f"bereits."}), 409
+            return jsonify({"error": f"Der Benutzer „{username}” existiert "
+                                     f"bereits, ist aber deaktiviert. Bitte "
+                                     f"stattdessen wieder aktivieren."}), 409
+        cur = conn.execute(
+            "INSERT INTO users (username, password_hash, role, active, "
+            "must_change_password, created_at, created_by) "
+            "VALUES (?, ?, ?, 1, 1, ?, ?)",
+            (username, generate_password_hash(password), role,
+             datetime.now().isoformat(timespec="seconds"), me["username"]),
+        )
+        new_id = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    audit.log(audit.CREATE, "user", new_id,
+              f"Benutzer „{username}” mit Rolle {role} angelegt")
+    return jsonify({
+        "id": new_id,
+        "username": username,
+        "role": role,
+        "generated_password": password if generated else None,
+        "message": f"Benutzer „{username}” wurde angelegt.",
+    }), 201
+
+
+@users_bp.route("/api/users/<int:user_id>", methods=["PUT"])
+@login_required
+@role_required(ROLE_ADMIN)
+def api_users_update(user_id: int):
+    """Ändert Rolle und Aktivstatus eines Kontos."""
+    from flask import jsonify
+    me = current_user()
+    data = request.get_json(force=True, silent=True) or {}
+
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            return jsonify({"error": "Benutzer nicht gefunden"}), 404
+
+        new_role = data.get("role", row["role"])
+        new_active = data.get("active", bool(row["active"]))
+
+        if new_role not in VALID_ROLES:
+            return jsonify({"error": f"Unbekannte Rolle: {new_role}"}), 400
+
+        # Aussperr-Schutz: sonst kann sich der letzte Administrator selbst
+        # die Rechte entziehen und niemand kommt mehr an die Verwaltung.
+        if user_id == me["id"] and (new_role != ROLE_ADMIN or not new_active):
+            return jsonify({"error": "Das eigene Konto kann nicht "
+                                     "herabgestuft oder deaktiviert werden."}), 400
+        losing_admin = (row["role"] == ROLE_ADMIN and row["active"]
+                        and (new_role != ROLE_ADMIN or not new_active))
+        if losing_admin and _active_admin_count(exclude_id=user_id) == 0:
+            return jsonify({"error": "Der letzte aktive Administrator kann "
+                                     "nicht herabgestuft oder deaktiviert "
+                                     "werden."}), 400
+
+        conn.execute("UPDATE users SET role = ?, active = ? WHERE id = ?",
+                     (new_role, 1 if new_active else 0, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    changes = audit.diff_text(dict(row), {"role": new_role, "active": new_active},
+                              ("role", "active"))
+    if changes:
+        audit.log(audit.UPDATE, "user", user_id,
+                  f"Benutzer „{row['username']}”: {changes}")
+    return jsonify({"ok": True, "id": user_id})
+
+
+@users_bp.route("/api/users/<int:user_id>", methods=["DELETE"])
+@login_required
+@role_required(ROLE_ADMIN)
+def api_users_delete(user_id: int):
+    """Deaktiviert ein Konto.
+
+    Bewusst keine Zeilenlöschung: das Audit-Log verweist über `username`
+    auf das Konto, und ein gelöschter Benutzer würde diese Zuordnung
+    zerstören. Deaktivieren sperrt den Zugang sofort und bleibt
+    nachvollziehbar.
+    """
+    from flask import jsonify
+    me = current_user()
+    if user_id == me["id"]:
+        return jsonify({"error": "Das eigene Konto kann nicht deaktiviert "
+                                 "werden."}), 400
+
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            return jsonify({"error": "Benutzer nicht gefunden"}), 404
+        if row["role"] == ROLE_ADMIN and _active_admin_count(exclude_id=user_id) == 0:
+            return jsonify({"error": "Der letzte aktive Administrator kann "
+                                     "nicht deaktiviert werden."}), 400
+        conn.execute("UPDATE users SET active = 0 WHERE id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    audit.log(audit.DELETE, "user", user_id,
+              f"Benutzer „{row['username']}” deaktiviert")
+    return jsonify({"ok": True, "id": user_id})
+
+
+@users_bp.route("/api/users/<int:user_id>/password", methods=["POST"])
+@login_required
+@role_required(ROLE_ADMIN)
+def api_users_reset_password(user_id: int):
+    """Setzt das Passwort eines Kontos zurück.
+
+    Das Konto muss das Passwort bei der nächsten Anmeldung ändern — sonst
+    kennt der Administrator dauerhaft ein fremdes Passwort.
+    """
+    from flask import jsonify
+    data = request.get_json(force=True, silent=True) or {}
+    password = data.get("password") or ""
+
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            return jsonify({"error": "Benutzer nicht gefunden"}), 404
+
+        generated = False
+        if not password:
+            password = secrets.token_urlsafe(12)
+            generated = True
+        else:
+            problem = validate_password(password, row["username"])
+            if problem:
+                return jsonify({"error": problem}), 400
+
+        conn.execute(
+            "UPDATE users SET password_hash = ?, must_change_password = 1, "
+            "password_changed_at = ? WHERE id = ?",
+            (generate_password_hash(password),
+             datetime.now().isoformat(timespec="seconds"), user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    audit.log(audit.UPDATE, "user", user_id,
+              f"Passwort von „{row['username']}” zurückgesetzt "
+              f"(Änderung bei nächster Anmeldung erzwungen)")
+    return jsonify({
+        "ok": True,
+        "username": row["username"],
+        "generated_password": password if generated else None,
+    })

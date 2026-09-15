@@ -132,10 +132,17 @@ function renderCustomers(query) {
                         data-id="${c.id}" title="Bearbeiten">
                     <i class="bi bi-pencil"></i>
                 </button>
+                ${window.CURRENT_USER_ROLE === 'admin' ? `
+                <a class="btn btn-sm btn-outline-secondary me-1"
+                   href="/api/kunden/${c.id}/export"
+                   title="Datenauskunft nach Art. 15 DSGVO als Datei herunterladen">
+                    <i class="bi bi-file-earmark-arrow-down"></i>
+                </a>` : ''}
+                ${window.CURRENT_USER_ROLE === 'admin' ? `
                 <button class="btn btn-sm btn-outline-danger delete-customer-btn"
                         data-id="${c.id}" data-name="${escapeHtml(c.name)}" title="Löschen">
                     <i class="bi bi-trash"></i>
-                </button>
+                </button>` : ''}
             </td>`;
         customersTableBody.appendChild(tr);
     });

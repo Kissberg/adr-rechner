@@ -254,9 +254,37 @@ hartcodierten Geheimnisse mehr im Quellcode.
 | `ADR_ADMIN_PASSWORD` | nein | zufällig | Passwort des ersten Administrators. Ohne Wert wird ein zufälliges erzeugt und in `.admin_password` im Datenverzeichnis abgelegt (**nicht** im Log). |
 | `ADR_REQUIRE_ADMIN_PASSWORD` | nein | `0` | `1` verweigert den Start, wenn `ADR_ADMIN_PASSWORD` fehlt — **im Produktivbetrieb empfohlen**. |
 | `ADR_ADMIN_PASSWORD_FILE` | nein | `<Datenverz>/.admin_password` | Alternativer Ort für die Passwortdatei. |
+| `ADR_PASSWORD_MIN_LENGTH` | nein | `12` | Mindestlänge neuer Passwörter (kleiner als 8 wird nicht akzeptiert). |
+| `ADR_MAX_LOGIN_ATTEMPTS` | nein | `10` | Fehlversuche, nach denen ein Konto gesperrt wird. |
+| `ADR_LOGIN_LOCKOUT_MINUTES` | nein | `15` | Dauer der Sperre. |
+| `ADR_AUDIT_RETENTION_DAYS` | nein | `0` (aus) | Tage, nach denen Audit-Einträge beim Start gelöscht werden. Siehe `DSGVO.md`. |
+| `ADR_AUDIT_LOG_IP` | nein | `1` | `0` schreibt keine IP-Adressen ins Audit-Log (Datenminimierung). |
+| `ADR_DB_DIR` / `ADR_DB_PATH` | nein | `<App>/data` | Datenverzeichnis bzw. -datei — für **mehrere Instanzen auf einem Server**. |
 | `PREFER_SECURE_COOKIE` | nein | `0` | `1` setzt `Secure` am Session-Cookie — **bei HTTPS/Betrieb hinter Reverse-Proxy setzen**. |
 | `MAX_UPLOAD_MB` | nein | `50` | Obergrenze für PDF-/Excel-Uploads (Schutz vor Ressourcenerschöpfung). |
 | `ADR_HOST` / `ADR_PORT` | nein | `127.0.0.1` / `5050` | Nur für `python app.py`. `ADR_HOST=0.0.0.0` ist ohne Reverse-Proxy nicht zulässig. |
+
+### Passwortrichtlinie
+
+Bewusst **längenorientiert** statt komplexitätsorientiert: BSI (TR-02102-1)
+und NIST (SP 800-63B) empfehlen beide Länge als wirksames Kriterium und
+raten von erzwungenen Zeichenklassen ab — sie führen nachweislich zu
+Mustern wie `Sommer2026!`. Geprüft wird:
+
+* Mindestlänge 12 Zeichen
+* nicht in einer Sperrliste gängiger Leak-Passwörter
+* enthält nicht den Benutzernamen
+* mindestens 5 verschiedene Zeichen
+
+Gespeichert wird ausschließlich ein **scrypt-Hash** (`N=32768, r=8, p=1`).
+
+Vom Administrator vergebene oder zurückgesetzte Passwörter müssen bei der
+nächsten Anmeldung ersetzt werden — sonst kennt die Verwaltung dauerhaft
+ein fremdes Passwort und die Nutzung ist nicht personenbezogen.
+
+Bei 10 Fehlversuchen wird das Konto 15 Minuten gesperrt. Gezählt wird über
+den Benutzernamen, nicht die IP-Adresse — sonst würde ein Wechsel der
+Quell-IP das Limit umgehen.
 
 ### Warum das erzeugte Passwort nicht im Log steht
 
@@ -283,10 +311,78 @@ verweigert die Anwendung den Start, solange kein Passwort gesetzt ist.
 
 ### Rollen
 
-| Rolle | Rechte |
-|-------|--------|
-| `admin` | Alles, inkl. UN-Datenbank, ADR-Import, Audit-Log, Löschen von Sendungen |
-| `user` | Berechnung, Beförderungspapiere, Kunden- und Adressverwaltung |
+| Funktion | `admin` | `user` |
+|---|:---:|:---:|
+| Berechnung, Beförderungspapiere | ✓ | ✓ |
+| Kunden und Adressen anlegen und ändern | ✓ | ✓ |
+| **Kunden und Adressen löschen** | ✓ | — |
+| **Datenauskunft nach Art. 15 DSGVO** | ✓ | — |
+| Benutzerverwaltung | ✓ | — |
+| Audit-Log einsehen | ✓ | — |
+| UN-Datenbank bearbeiten, ADR-Import, Verifikation | ✓ | — |
+| Sendungen löschen | ✓ | — |
+
+Löschvorgänge und die Auskunft nach Art. 15 sind auf Administratoren
+beschränkt: beides betrifft personenbezogene Daten unmittelbar und ist
+nicht umkehrbar.
+
+### Benutzerverwaltung
+
+Administratoren legen unter **Benutzerverwaltung** (Menü oben rechts) die
+Konten an. Ein Kennwort kann vorgegeben oder erzeugt werden; ein erzeugtes
+wird **genau einmal** angezeigt und erscheint niemals im Log. Jedes so
+vergebene Passwort muss bei der ersten Anmeldung ersetzt werden.
+
+Konten werden **deaktiviert, nicht gelöscht** — das Audit-Log verweist über
+den Benutzernamen auf das Konto, eine Zeilenlöschung würde diese Zuordnung
+zerstören. Der letzte aktive Administrator kann sich weder selbst
+herabstufen noch deaktivieren.
+
+Ein vergessenes Administratorkonto lässt sich nur auf dem Server zurücksetzen:
+
+```bash
+docker exec -it adr-rechner python manage.py list-users
+docker exec -it adr-rechner python manage.py reset-password admin
+docker exec -it adr-rechner python manage.py unlock admin     # Sperre aufheben
+docker exec -it adr-rechner python manage.py check            # Bestand prüfen
+```
+
+### Eine Instanz je Niederlassung
+
+Die Anwendung hat **keine Mandantentrennung**: alle angemeldeten Konten
+sehen alle Kunden. Für einen Betrieb mit mehreren Niederlassungen ist
+deshalb **je Standort eine eigene Instanz** vorgesehen — getrennte
+Datenbestände, getrennte Zugänge, kein gegenseitiger Einblick.
+
+```bash
+# Niederlassung München
+docker run -d --name adr-muenchen \
+  -p 127.0.0.1:5051:5050 \
+  -v adr_muenchen_data:/app/data \
+  -v adr_muenchen_exports:/app/exports \
+  -e SECRET_KEY="$(openssl rand -hex 32)" \
+  -e ADR_ADMIN_PASSWORD="<starkes-passwort>" \
+  -e ADR_REQUIRE_ADMIN_PASSWORD=1 \
+  -e ADR_AUDIT_RETENTION_DAYS=3650 \
+  kissberg/adr-rechner:latest
+
+# Niederlassung Hamburg — eigener Port, eigenes Volume, eigenes SECRET_KEY
+docker run -d --name adr-hamburg \
+  -p 127.0.0.1:5052:5050 \
+  -v adr_hamburg_data:/app/data \
+  -v adr_hamburg_exports:/app/exports \
+  -e SECRET_KEY="$(openssl rand -hex 32)" \
+  -e ADR_ADMIN_PASSWORD="<anderes-starkes-passwort>" \
+  -e ADR_REQUIRE_ADMIN_PASSWORD=1 \
+  kissberg/adr-rechner:latest
+```
+
+Jede Instanz hat ihre eigene Datenbank und ihr eigenes `SECRET_KEY` —
+nie dasselbe verwenden, sonst ist eine Sitzung in beiden gültig.
+
+Die UN-Stammdaten (Tabelle A) sind in jeder Instanz identisch und werden
+aus derselben BAM-Datei befüllt; sie müssen bei einem ADR-Versionswechsel
+in jeder Instanz einmal aktualisiert werden.
 
 ### Empfohlener Produktivbetrieb
 
@@ -300,6 +396,7 @@ docker run -d \
   -e ADR_ADMIN_PASSWORD="<starkes-passwort>" \
   -e ADR_REQUIRE_ADMIN_PASSWORD=1 \
   -e PREFER_SECURE_COOKIE=1 \
+  -e ADR_AUDIT_RETENTION_DAYS=3650 \
   kissberg/adr-rechner:latest
 ```
 
@@ -307,18 +404,35 @@ Danach einen Reverse-Proxy (nginx, Traefik, Caddy) mit TLS vorschalten und
 den Container **nicht** direkt exponieren. Der Healthcheck ist unter
 `/healthz` ohne Anmeldung erreichbar.
 
+Das Passwort selbst wird **nicht** in die Kommandozeile geschrieben (sie
+erscheint sonst in der Prozessliste und in der Shell-Historie). Stattdessen
+eine Env-Datei mit `chmod 600` verwenden oder den Wert beim ersten Start
+erzeugen lassen.
+
 ### Datenschutz / Nachweispflicht
 
 - Alle Änderungen an Stammdaten, Sendungen und ADR-Importen werden im
-  **Audit-Log** protokolliert (Benutzer, Zeit, Aktion, Änderung, IP).
-  Das Log ist append-only und nur für Administratoren unter
+  **Audit-Log** protokolliert (Benutzer, Zeit, Aktion, geänderte Felder,
+  optional IP). Das Log ist append-only und nur für Administratoren unter
   `/api/audit-log` abrufbar.
+- Bei Kunden- und Adressänderungen werden **nur die Feldnamen** festgehalten,
+  nicht die Werte. Sonst entstünde im Log eine zweite Kopie der
+  Kundenstammdaten, die eine Löschung nach Art. 17 DSGVO überleben würde.
 - Kundendaten sind personenbezogene Daten im Sinne der DSGVO. Der
   Zugriffsschutz ist daher keine Komfortfunktion, sondern eine Anforderung
   aus Art. 32 DSGVO.
+- Das Log enthält Benutzernamen und — sofern aktiviert — IP-Adressen.
+  Ohne Aufbewahrungsfrist wächst es unbegrenzt (Art. 5 Abs. 1 lit. e).
+  Über `ADR_AUDIT_RETENTION_DAYS` oder `manage.py purge-audit` aufräumen.
+- Zugehörige Beförderungspapier-PDFs werden beim Löschen einer Sendung
+  mitgelöscht — sie enthalten die vollständige Empfängeranschrift.
 - Für eine GoBD-konforme Archivierung der Beförderungspapiere ist zusätzlich
   ein WORM-Speicher bzw. eine Signatur/Timestamping-Lösung erforderlich
   (siehe `PLAN.md`).
+
+**Die vollständige Datenschutz-Dokumentation** — Verzeichnis nach Art. 30,
+Rechtsgrundlagen, Löschkonzept, TOM und die Umsetzung der Betroffenenrechte —
+steht in **[`DSGVO.md`](DSGVO.md)**.
 
 ---
 

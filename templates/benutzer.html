@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h4 class="mb-0"><i class="bi bi-people me-1"></i>Benutzerverwaltung</h4>
+        <p class="text-muted small mb-0">
+            Jede Niederlassung betreibt eine eigene Instanz dieser Anwendung.
+            Legen Sie hier die Konten für die Sachbearbeiter dieser
+            Niederlassung an.
+        </p>
+    </div>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#neuModal">
+        <i class="bi bi-person-plus me-1"></i>Benutzer anlegen
+    </button>
+</div>
+
+<div id="pageAlert" class="alert d-none"></div>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Benutzername</th>
+                    <th>Rolle</th>
+                    <th>Status</th>
+                    <th>Passwort</th>
+                    <th>Letzte Anmeldung</th>
+                    <th>Angelegt von</th>
+                    <th class="text-end">Aktionen</th>
+                </tr>
+            </thead>
+            <tbody id="userRows">
+                <tr><td colspan="7" class="text-center text-muted py-4">Lade …</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="alert alert-secondary mt-3 small">
+    <strong>Rollen.</strong>
+    <em>Administrator</em> darf zusätzlich Stammdaten pflegen (UN-Datenbank,
+    ADR-Import), das Audit-Log einsehen und Daten löschen.
+    <em>Benutzer</em> rechnet, erstellt Beförderungspapiere und pflegt Kunden
+    und Adressen.
+</div>
+
+<div class="modal fade" id="neuModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Benutzer anlegen</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"
+                        aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <div id="neuAlert" class="alert d-none"></div>
+                <div class="mb-3">
+                    <label class="form-label" for="neuName">Benutzername</label>
+                    <input type="text" class="form-control" id="neuName"
+                           placeholder="z. B. muenchen01" autocomplete="off">
+                    <div class="form-text">
+                        3–64 Zeichen: Buchstaben, Ziffern, Punkt, Bindestrich,
+                        Unterstrich.
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="neuRole">Rolle</label>
+                    <select class="form-select" id="neuRole">
+                        <option value="user" selected>Benutzer</option>
+                        <option value="admin">Administrator</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="neuPw">
+                        Passwort <span class="text-muted">(optional)</span>
+                    </label>
+                    <input type="text" class="form-control" id="neuPw"
+                           autocomplete="off"
+                           placeholder="Leer lassen — wird erzeugt">
+                    <div class="form-text">
+                        Mindestens {{ min_password_length }} Zeichen. Bleibt das
+                        Feld leer, erzeugt die Anwendung ein Passwort und zeigt
+                        es einmalig an. Die Person muss es bei der ersten
+                        Anmeldung ohnehin ändern.
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    Abbrechen
+                </button>
+                <button type="button" class="btn btn-primary" id="neuSave">Anlegen</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="pwModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Passwort für <span id="pwUser"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"
+                        aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <div id="pwAlert2" class="alert d-none"></div>
+                <div class="mb-3">
+                    <label class="form-label" for="pwValue">
+                        Neues Passwort <span class="text-muted">(optional)</span>
+                    </label>
+                    <input type="text" class="form-control" id="pwValue"
+                           autocomplete="off" placeholder="Leer lassen — wird erzeugt">
+                </div>
+                <p class="small text-muted mb-0">
+                    Die betroffene Person muss das Passwort bei der nächsten
+                    Anmeldung ändern. Bis dahin ist die Nutzung nicht
+                    personenbezogen — der Hinweis im Audit-Log bleibt aber
+                    bestehen.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    Abbrechen
+                </button>
+                <button type="button" class="btn btn-warning" id="pwReset">
+                    Passwort zurücksetzen
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="showPwModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Passwort einmalig sichtbar</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"
+                        aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning mb-3">
+                    Dieses Passwort wird <strong>nicht erneut</strong> angezeigt
+                    und steht nicht im Log. Bitte jetzt sicher übergeben.
+                </div>
+                <div class="input-group">
+                    <input type="text" class="form-control font-monospace"
+                           id="showPwValue" readonly>
+                    <button class="btn btn-outline-secondary" type="button"
+                            id="showPwCopy">Kopieren</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>window.MIN_PASSWORD_LENGTH = {{ min_password_length }};</script>
+<script src="{{ url_for('static', filename='js/benutzer.js') }}"></script>
+{% endblock %}

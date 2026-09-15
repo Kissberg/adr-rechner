@@ -26,6 +26,20 @@ services:
       - ADR_REQUIRE_ADMIN_PASSWORD=${ADR_REQUIRE_ADMIN_PASSWORD:-0}
       - PREFER_SECURE_COOKIE=${PREFER_SECURE_COOKIE:-1}
       - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-50}
+      # Passwortrichtlinie und Schutz gegen Raten
+      - ADR_PASSWORD_MIN_LENGTH=${ADR_PASSWORD_MIN_LENGTH:-12}
+      - ADR_MAX_LOGIN_ATTEMPTS=${ADR_MAX_LOGIN_ATTEMPTS:-10}
+      - ADR_LOGIN_LOCKOUT_MINUTES=${ADR_LOGIN_LOCKOUT_MINUTES:-15}
+      # Aufbewahrungsfrist des Audit-Logs in Tagen. Enthält Benutzernamen
+      # und ggf. IP-Adressen (Art. 5 Abs. 1 lit. e DSGVO) — Frist im
+      # Löschkonzept festlegen, siehe DSGVO.md. 0 = beim Start nicht räumen.
+      - ADR_AUDIT_RETENTION_DAYS=${ADR_AUDIT_RETENTION_DAYS:-3650}
+      # IP-Adressen im Audit-Log: nur erforderlich, wenn Vorfälle
+      # aufgeklärt werden müssen. 0 reduziert den Personenbezug.
+      - ADR_AUDIT_LOG_IP=${ADR_AUDIT_LOG_IP:-1}
+      # Eigenes Datenverzeichnis je Instanz — für eine Instanz pro
+      # Niederlassung auf demselben Server.
+      - ADR_DB_DIR=${ADR_DB_DIR:-/app/data}
     logging:
       driver: json-file
       options:

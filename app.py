@@ -3,8 +3,10 @@ ADR 1000-Punkte-Rechner — Flask Application
 Gefahrgut-Transportberechnung nach ADR 1.1.3.6 (1000-Punkte-Regel)
 """
 
+import json
 import os
 import sys
+from datetime import datetime
 
 from flask import (
     Flask,
@@ -18,7 +20,9 @@ from flask import (
     session,
 )
 from database import get_db, init_db, seed_un_numbers, next_doc_number
-from befoerderungspapier import generate_befoerderungspapier
+from befoerderungspapier import (
+    generate_befoerderungspapier, delete_export_file,
+)
 from adr_import import (
     import_bam_data,
     get_version_history,
@@ -34,8 +38,9 @@ from adr_rules import (
 )
 import audit
 from auth import (
-    auth_bp, auth_enabled, current_user, ensure_default_admin,
+    auth_bp, users_bp, auth_enabled, current_user, ensure_default_admin,
     login_required, role_required, ROLE_ADMIN, ROLE_USER,
+    PASSWORD_MIN_LENGTH,
 )
 
 app = Flask(__name__)
@@ -60,6 +65,7 @@ app.config.update(
 )
 
 app.register_blueprint(auth_bp)
+app.register_blueprint(users_bp)
 
 # ----------------------------------------------------------------
 # Datenbank-Initialisierung beim ersten Start
@@ -81,11 +87,38 @@ if os.environ.get("SECRET_KEY") is None:
         file=sys.stderr,
     )
 
+# ----------------------------------------------------------------
+# Aufbewahrungsfrist des Audit-Logs
+# ----------------------------------------------------------------
+# Das Log enthält Benutzernamen und — sofern nicht abgeschaltet —
+# IP-Adressen. Ohne Frist wächst es unbegrenzt, was dem Grundsatz der
+# Speicherbegrenzung widerspricht (Art. 5 Abs. 1 lit. e DSGVO).
+#
+# Die Frist ist bewusst nicht fest verdrahtet: sie hängt an den
+# handels- und steuerrechtlichen Aufbewahrungspflichten des Betriebs
+# (§ 257 HGB, § 147 AO) und gehört in ein dokumentiertes Löschkonzept.
+# Ohne ADR_AUDIT_RETENTION_DAYS passiert beim Start nichts; aufgeräumt
+# wird dann gezielt über `manage.py purge-audit --days N`.
+_AUDIT_RETENTION_DAYS = int(os.environ.get("ADR_AUDIT_RETENTION_DAYS", "0") or 0)
+if _AUDIT_RETENTION_DAYS > 0:
+    with app.app_context():
+        try:
+            _entfernt = audit.purge_old_entries(_AUDIT_RETENTION_DAYS)
+            if _entfernt:
+                print(f"[audit] {_entfernt} Einträge älter als "
+                      f"{_AUDIT_RETENTION_DAYS} Tage entfernt.")
+        except Exception as exc:  # pragma: no cover
+            print(f"[audit] Aufräumen fehlgeschlagen: {exc}", file=sys.stderr)
+
 
 # ----------------------------------------------------------------
 # Zugriffsschutz für alle Routen (außer Anmeldung, Statik, Healthcheck)
 # ----------------------------------------------------------------
 PUBLIC_ENDPOINTS = {"auth.login", "auth.logout", "static", "healthz"}
+
+# Erreichbar, solange ein Passwortwechsel aussteht — sonst käme man aus der
+# erzwungenen Änderung nicht mehr heraus.
+PASSWORD_CHANGE_ENDPOINTS = {"auth.password_page", "auth.change_password"}
 
 
 @app.before_request
@@ -95,12 +128,26 @@ def _require_login():
         return None
     if request.endpoint in PUBLIC_ENDPOINTS:
         return None
-    if current_user() is not None:
-        return None
 
-    if request.path.startswith("/api/"):
-        return jsonify({"error": "Nicht angemeldet"}), 401
-    return redirect(url_for("auth.login", next=request.full_path))
+    user = current_user()
+    if user is None:
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Nicht angemeldet"}), 401
+        return redirect(url_for("auth.login", next=request.full_path))
+
+    # Von einem Administrator vergebenes oder zurückgesetztes Passwort:
+    # erst selbst ersetzen, dann weiterarbeiten. Sonst bliebe ein fremd
+    # bekanntes Passwort dauerhaft gültig.
+    if user.get("must_change_password") and \
+            request.endpoint not in PASSWORD_CHANGE_ENDPOINTS:
+        if request.path.startswith("/api/"):
+            return jsonify({
+                "error": "Passwortwechsel erforderlich",
+                "must_change_password": True,
+            }), 403
+        return redirect(url_for("auth.password_page"))
+
+    return None
 
 
 @app.context_processor
@@ -110,6 +157,7 @@ def _inject_user():
         "current_user": current_user(),
         "app_version": APP_VERSION,
         "auth_enabled": auth_enabled(),
+        "min_password_length": PASSWORD_MIN_LENGTH,
     }
 
 
@@ -122,6 +170,23 @@ APP_VERSION = "2.0.0"
 def get_db_conn():
     """Wrapper für den Datenbankzugriff."""
     return get_db()
+
+
+def deny_unless_admin():
+    """403-Antwort, wenn der angemeldete Benutzer kein Administrator ist.
+
+    Für Routen, die mehrere Methoden bedienen und nur bei einzelnen davon
+    Administratorrechte verlangen (z. B. GET für alle, DELETE nur für
+    Administratoren) — dort greift der Dekorator nicht.
+
+    Gibt None zurück, wenn der Zugriff erlaubt ist. Anders als das frühere
+    „if user and user["role"] != ...“ schlägt die Prüfung auch dann an, wenn
+    ausnahmsweise kein Benutzer im Kontext steht (fail closed).
+    """
+    user = current_user()
+    if user is None or user.get("role") != ROLE_ADMIN:
+        return jsonify({"error": "Keine Berechtigung"}), 403
+    return None
 
 
 @app.route("/healthz")
@@ -227,8 +292,14 @@ def un_database():
 
 
 @app.route("/adr-import")
+@login_required
+@role_required(ROLE_ADMIN)
 def adr_import_page():
-    """ADR PDF Import-Seite."""
+    """Stammdatenpflege: BAM-Datei importieren, ADR-PDF gegenprüfen.
+
+    Reine Administratorfunktion — ein Normalbenutzer braucht sie nicht und
+    die Prüfung ist rechenintensiv.
+    """
     return render_template("adr_import.html", title="ADR-Version importieren")
 
 
@@ -568,24 +639,33 @@ def api_shipments():
 @login_required
 def api_shipment_delete(id):
     """Sendung löschen (nur Admin). Positionen werden mitgelöscht."""
-    user = current_user()
-    if user and user.get("role") != ROLE_ADMIN:
-        return jsonify({"error": "Nur Administratoren dürfen Sendungen löschen."}), 403
+    denied = deny_unless_admin()
+    if denied:
+        return denied
 
     db = get_db()
-    row = db.execute("SELECT doc_number FROM shipments WHERE id = ?", (id,)).fetchone()
+    row = db.execute("SELECT doc_number, bef_papier_path FROM shipments "
+                     "WHERE id = ?", (id,)).fetchone()
     if row is None:
         db.close()
         return jsonify({"error": f"Sendung #{id} nicht gefunden"}), 404
 
     doc = row["doc_number"] or f"#{id}"
+    pdf_pfad = row["bef_papier_path"]
     db.execute("DELETE FROM shipment_items WHERE shipment_id = ?", (id,))
     db.execute("DELETE FROM shipments WHERE id = ?", (id,))
     db.commit()
     db.close()
 
-    audit.log(audit.DELETE, "shipment", id, f"Sendung {doc} gelöscht")
-    return jsonify({"ok": True, "deleted": id})
+    # Die erzeugte PDF-Datei enthält die vollständige Empfängeranschrift und
+    # muss mit der Sendung verschwinden — sonst überlebt das
+    # personenbezogene Datum die Löschung als lose Datei auf dem Volume.
+    pdf_geloescht = delete_export_file(pdf_pfad)
+
+    audit.log(audit.DELETE, "shipment", id,
+              f"Sendung {doc} gelöscht"
+              + (", Beförderungspapier-Datei entfernt" if pdf_geloescht else ""))
+    return jsonify({"ok": True, "deleted": id, "pdf_removed": pdf_geloescht})
 
 
 @app.route("/api/audit-log")
@@ -636,6 +716,8 @@ def _read_upload(field: str, allowed_ext):
 
 
 @app.route("/api/adr/preview", methods=["POST"])
+@login_required
+@role_required(ROLE_ADMIN)
 def adr_preview():
     """BAM-Datei einlesen, ohne zu speichern — Vorschau und Prüfung."""
     data_file, err = _read_upload("dataFile", ALLOWED_DATA_EXT)
@@ -685,11 +767,13 @@ def adr_preview():
 
 
 @app.route("/api/adr/import", methods=["POST"])
+@login_required
+@role_required(ROLE_ADMIN)
 def adr_import():
     """BAM-Datei in die Datenbank übernehmen (nur Administratoren)."""
-    user = current_user()
-    if user and user.get("role") != ROLE_ADMIN:
-        return jsonify({"error": "Keine Berechtigung"}), 403
+    denied = deny_unless_admin()
+    if denied:
+        return denied
 
     data_file, err = _read_upload("dataFile", ALLOWED_DATA_EXT)
     if err:
@@ -731,6 +815,8 @@ def adr_import():
 
 
 @app.route("/api/adr/verify", methods=["POST"])
+@login_required
+@role_required(ROLE_ADMIN)
 def adr_verify():
     """ADR-PDF gegen den Datenbestand prüfen und Vorschriftentexte lesen.
 
@@ -778,6 +864,8 @@ def adr_verify():
 
 
 @app.route("/api/adr/scans", methods=["GET"])
+@login_required
+@role_required(ROLE_ADMIN)
 def adr_scans():
     """Verlauf der Vorschriftenprüfungen (Prüfsummen je Abschnitt)."""
     try:
@@ -787,6 +875,8 @@ def adr_scans():
 
 
 @app.route("/api/adr/versions", methods=["GET"])
+@login_required
+@role_required(ROLE_ADMIN)
 def adr_versions():
     """List ADR version import history."""
     try:
@@ -869,9 +959,9 @@ def api_un_database():
         return _un_database_list()
     elif request.method == "POST":
         # Stammdaten dürfen nur Administratoren anlegen.
-        user = current_user()
-        if user and user.get("role") != ROLE_ADMIN:
-            return jsonify({"error": "Keine Berechtigung"}), 403
+        denied = deny_unless_admin()
+        if denied:
+            return denied
         return _un_database_create()
 
 
@@ -1275,16 +1365,26 @@ def api_customer_by_id(id):
         updated = db.execute("SELECT * FROM customers WHERE id = ?", (id,)).fetchone()
         db.close()
 
-        audit.log(
-            audit.UPDATE, "customer", id,
-            f"Kunde #{id}: " + audit.diff_text(
-                before, dict(updated),
-                ("name", "street", "zip", "city", "country", "contact",
-                 "phone", "email"))
-        )
+        # Nur die Feldnamen, nicht die Werte: sonst entstünde im Audit-Log
+        # eine zweite Kopie der Kundenstammdaten, die eine Löschung nach
+        # Art. 17 DSGVO überleben würde.
+        geaenderte_felder = audit.changed_fields(
+            before, dict(updated),
+            ("name", "street", "zip", "city", "country", "contact",
+             "phone", "email"))
+        if geaenderte_felder:
+            audit.log(audit.UPDATE, "customer", id,
+                      f"Kunde #{id}, geänderte Felder: {geaenderte_felder}")
         return jsonify(dict(updated))
 
     elif request.method == "DELETE":
+        # Kundenstammdaten sind personenbezogene Daten und die Löschung ist
+        # nicht umkehrbar — das bleibt Administratoren vorbehalten.
+        denied = deny_unless_admin()
+        if denied:
+            db.close()
+            return denied
+
         row = db.execute("SELECT id, name FROM customers WHERE id = ?", (id,)).fetchone()
         if row is None:
             db.close()
@@ -1306,9 +1406,89 @@ def api_customer_by_id(id):
         db.commit()
         db.close()
 
-        audit.log(audit.DELETE, "customer", id,
-                  f"Kunde „{row['name']}” gelöscht")
+        # Ohne Namen: bei Einzelunternehmen ist der Firmenname zugleich der
+        # Name einer natürlichen Person und damit personenbezogen.
+        audit.log(audit.DELETE, "customer", id, "Kundenstammdatensatz gelöscht")
         return jsonify({"message": f"Kunde „{row['name']}” wurde gelöscht", "id": id})
+
+
+# ── Auskunft und Datenübertragbarkeit (Art. 15 / Art. 20 DSGVO) ────────
+
+@app.route("/api/kunden/<int:id>/export", methods=["GET"])
+@login_required
+@role_required(ROLE_ADMIN)
+def api_customer_export(id):
+    """Stellt alle zu einem Kunden gespeicherten Daten zusammen.
+
+    Deckt zwei Betroffenenrechte ab:
+
+      Art. 15 DSGVO (Auskunft) — welche Daten sind gespeichert?
+      Art. 20 DSGVO (Datenübertragbarkeit) — Herausgabe in einem
+      strukturierten, gängigen und maschinenlesbaren Format.
+
+    Die Ausgabe ist bewusst auf den angefragten Kunden begrenzt und enthält
+    keine Daten anderer Kunden. Der Vorgang selbst wird im Audit-Log
+    vermerkt — ohne die Inhalte, denn die Auskunft ist der Zweck, nicht die
+    Erweiterung des Datenbestands.
+    """
+    db = get_db()
+    try:
+        zeile = db.execute("SELECT * FROM customers WHERE id = ?", (id,)).fetchone()
+        if zeile is None:
+            return jsonify({"error": f"Kunde #{id} nicht gefunden"}), 404
+        kunde = dict(zeile)
+
+        sendungen = [dict(r) for r in db.execute(
+            "SELECT * FROM shipments WHERE customer_id = ? ORDER BY created_at",
+            (id,)).fetchall()]
+
+        positionen = {}
+        for s in sendungen:
+            positionen[s["id"]] = [dict(r) for r in db.execute(
+                "SELECT * FROM shipment_items WHERE shipment_id = ? ORDER BY id",
+                (s["id"],)).fetchall()]
+
+        adress_ids = {s["shipping_address_id"] for s in sendungen
+                      if s.get("shipping_address_id")}
+        adressen = []
+        for aid in sorted(adress_ids):
+            a = db.execute("SELECT * FROM shipping_addresses WHERE id = ?",
+                           (aid,)).fetchone()
+            if a:
+                adressen.append(dict(a))
+    finally:
+        db.close()
+
+    for s in sendungen:
+        s["items"] = positionen.get(s["id"], [])
+
+    # Interne Felder, die keine Auskunft über die Person geben, aber
+    # Systemdetails preisgeben würden.
+    for feld in ("bef_papier_path",):
+        kunde.pop(feld, None)
+        for s in sendungen:
+            s.pop(feld, None)
+
+    inhalt = {
+        "exportiert_am": datetime.now().isoformat(timespec="seconds"),
+        "hinweis": ("Auskunft nach Art. 15 DSGVO bzw. Herausgabe nach "
+                    "Art. 20 DSGVO. Enthält alle zum Kunden gespeicherten "
+                    "personenbezogenen Daten."),
+        "kunde": kunde,
+        "absenderadressen": adressen,
+        "sendungen": sendungen,
+    }
+
+    audit.log(audit.EXPORT, "customer", id, "Datenauskunft nach Art. 15 DSGVO erteilt")
+
+    dateiname = f"kunde_{id}_auskunft_{datetime.now().strftime('%Y%m%d')}.json"
+    antwort = app.response_class(
+        response=json.dumps(inhalt, ensure_ascii=False, indent=2),
+        status=200,
+        mimetype="application/json",
+    )
+    antwort.headers["Content-Disposition"] = f'attachment; filename="{dateiname}"'
+    return antwort
 
 
 # ── Excel Import ───────────────────────────────────────────────────────
@@ -1592,15 +1772,23 @@ def api_shipping_address_by_id(id):
         ).fetchone()
         db.close()
 
-        audit.log(
-            audit.UPDATE, "shipping_address", id,
-            f"Adresse #{id}: " + audit.diff_text(
-                before, dict(updated),
-                ("name", "street", "zip", "city", "country", "is_default"))
-        )
+        # Wie bei den Kunden: nur Feldnamen, keine Werte.
+        geaenderte_felder = audit.changed_fields(
+            before, dict(updated),
+            ("name", "street", "zip", "city", "country", "is_default"))
+        if geaenderte_felder:
+            audit.log(audit.UPDATE, "shipping_address", id,
+                      f"Adresse #{id}, geänderte Felder: {geaenderte_felder}")
         return jsonify(dict(updated))
 
     elif request.method == "DELETE":
+        # Absenderadressen enthalten personenbezogene Daten; die Löschung
+        # ist nicht umkehrbar und bleibt Administratoren vorbehalten.
+        denied = deny_unless_admin()
+        if denied:
+            db.close()
+            return denied
+
         row = db.execute(
             "SELECT id, name FROM shipping_addresses WHERE id = ?", (id,)
         ).fetchone()
@@ -1624,8 +1812,8 @@ def api_shipping_address_by_id(id):
         db.commit()
         db.close()
 
-        audit.log(audit.DELETE, "shipping_address", id,
-                  f"Adresse „{row['name']}” gelöscht")
+        # Ohne Namen — siehe Kundenlöschung.
+        audit.log(audit.DELETE, "shipping_address", id, "Absenderadresse gelöscht")
         return jsonify({"message": f"Adresse „{row['name']}” wurde gelöscht", "id": id})
 
 

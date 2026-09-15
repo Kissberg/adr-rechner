@@ -32,8 +32,13 @@ from adr_rules import (
     FOOTNOTE_A_MAX_QTY,
 )
 
-DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-DB_PATH = os.path.join(DB_DIR, "adr.db")
+# Über ADR_DB_DIR / ADR_DB_PATH umlenkbar. Das braucht man, wenn mehrere
+# Instanzen (etwa je Niederlassung) auf demselben Server laufen und jede
+# ihren eigenen Datenbestand haben soll — genau das ist der Zweck der
+# Trennung nach Niederlassungen.
+DB_DIR = os.environ.get("ADR_DB_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data")
+DB_PATH = os.environ.get("ADR_DB_PATH") or os.path.join(DB_DIR, "adr.db")
 
 # Maximale Wartezeit bei Schreibkonflikten (ms). Erhöht, weil mehrere
 # Gunicorn-Worker gleichzeitig auf dieselbe SQLite-Datei zugreifen.
@@ -156,7 +161,20 @@ def init_db() -> None:
             role           VARCHAR(20) NOT NULL DEFAULT 'user',
             active         BOOLEAN NOT NULL DEFAULT 1,
             created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_login     TIMESTAMP
+            last_login     TIMESTAMP,
+            -- Von einem Administrator vergebenes/zurückgesetztes Passwort:
+            -- muss bei der nächsten Anmeldung ersetzt werden.
+            must_change_password BOOLEAN NOT NULL DEFAULT 0,
+            password_changed_at  TIMESTAMP,
+            created_by           VARCHAR(100)
+        );
+
+        -- Fehlversuche beim Anmelden (Schutz gegen Passwortraten).
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            username     VARCHAR(100) NOT NULL,
+            ip_address   VARCHAR(50),
+            attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
         -- Änderungsprotokoll (append-only, DSGVO Art. 30 / GoBD)
@@ -254,6 +272,38 @@ def init_db() -> None:
             cursor.execute(f"ALTER TABLE un_numbers ADD COLUMN {col} {ddl}")
         except sqlite3.OperationalError:
             pass
+
+    # ── v4.0: Benutzerverwaltung und Schutz gegen Passwortraten ──
+    # must_change_password: Von einem Administrator vergebene oder
+    # zurückgesetzte Passwörter sind nur ein Übergangswert. Die Person, die
+    # das Konto nutzt, muss ihn beim ersten Anmelden selbst ersetzen — sonst
+    # kennt der Administrator dauerhaft ein fremdes Passwort.
+    V4_USER_COLUMNS = {
+        "must_change_password": "BOOLEAN NOT NULL DEFAULT 0",
+        "password_changed_at": "TIMESTAMP",
+        "created_by": "VARCHAR(100)",
+    }
+    for col, ddl in V4_USER_COLUMNS.items():
+        try:
+            cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {ddl}")
+        except sqlite3.OperationalError:
+            pass
+
+    # Fehlversuche werden in der Datenbank gezählt, nicht im Prozessspeicher:
+    # bei mehreren Gunicorn-Workern hätte jeder Worker sonst einen eigenen
+    # Zähler und das Limit wäre wirkungslos.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            username    VARCHAR(100) NOT NULL,
+            ip_address  VARCHAR(50),
+            attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_login_attempts "
+        "ON login_attempts(username, attempted_at)"
+    )
 
     conn.commit()
     conn.close()

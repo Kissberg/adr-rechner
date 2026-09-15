@@ -16,6 +16,7 @@ die Aufbewahrungsfrist in `purge_old_entries()`.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -44,8 +45,23 @@ ACTION_LABELS = {
 }
 
 
+def _log_ip_enabled() -> bool:
+    """Ob die Client-IP mitgeschrieben wird.
+
+    Die IP-Adresse ist personenbezogen (Art. 4 Nr. 1 DSGVO). Für die
+    Nachvollziehbarkeit von Änderungen ist sie nicht erforderlich — sie
+    hilft nur bei der Aufklärung von Missbrauch. Wer darauf verzichten
+    kann, setzt ADR_AUDIT_LOG_IP=0 und reduziert damit den gespeicherten
+    Personenbezug auf das Nötige (Art. 5 Abs. 1 lit. c).
+    """
+    return os.environ.get("ADR_AUDIT_LOG_IP", "1").strip().lower() \
+        not in ("0", "false", "no")
+
+
 def _client_ip() -> str:
     """Ermittelt die Client-IP (ohne Vertrauen in X-Forwarded-For)."""
+    if not _log_ip_enabled():
+        return ""
     return request.remote_addr or "" if request else ""
 
 
@@ -95,7 +111,12 @@ def log(
 
 
 def diff_text(before: dict, after: dict, fields: tuple) -> str:
-    """Erzeugt eine lesbare Änderungsbeschreibung ('feld: alt → neu')."""
+    """Erzeugt eine lesbare Änderungsbeschreibung ('feld: alt → neu').
+
+    Nur für Felder ohne Personenbezug verwenden (z. B. Rolle, Aktivstatus).
+    Für personenbezogene Stammdaten gehört `changed_fields` hierher — sonst
+    entsteht im Audit-Log eine zweite, dauerhafte Kopie der Daten.
+    """
     parts = []
     for f in fields:
         old = before.get(f)
@@ -103,6 +124,24 @@ def diff_text(before: dict, after: dict, fields: tuple) -> str:
         if str(old) != str(new):
             parts.append(f"{f}: {old!r} → {new!r}")
     return "; ".join(parts)
+
+
+def changed_fields(before: dict, after: dict, fields: tuple) -> str:
+    """Nennt nur die geänderten Feldnamen — ohne die Werte selbst.
+
+    Das Audit-Log soll belegen, *dass* und *wer* etwas geändert hat, nicht
+    die Daten selbst ein zweites Mal speichern. Ein Mitschreiben der Werte
+    hätte zwei Folgen:
+
+      1. Das Log wird zur Kopie der Kundenstammdaten und unterläuft damit
+         die Datenminimierung (Art. 5 Abs. 1 lit. c DSGVO).
+      2. Eine Löschung nach Art. 17 DSGVO bliebe wirkungslos — Name,
+         Ansprechpartner, Telefon und E-Mail stünden weiterhin im Log.
+
+    Beispiel: „geändert: contact, phone, email“.
+    """
+    geaendert = [f for f in fields if str(before.get(f)) != str(after.get(f))]
+    return ", ".join(geaendert)
 
 
 def purge_old_entries(days: int = 3650) -> int:

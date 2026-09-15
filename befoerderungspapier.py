@@ -61,6 +61,36 @@ _PLURAL_MAP = {
 }
 
 
+def delete_export_file(path: str) -> bool:
+    """Löscht eine erzeugte Beförderungspapier-Datei vom Volume.
+
+    Ein Beförderungspapier enthält die vollständige Empfängeranschrift. Wird
+    eine Sendung gelöscht, muss die Datei mitgelöscht werden — sonst bleibt
+    das personenbezogene Datum als lose Datei liegen und die Löschung wäre
+    unvollständig (Art. 17 DSGVO).
+
+    Gelöscht wird ausschließlich innerhalb von EXPORT_DIR. Der Pfad stammt
+    aus der Datenbank; ohne diese Prüfung könnte ein manipulierter oder
+    veralteter Eintrag eine Löschung außerhalb des Exportverzeichnisses
+    auslösen.
+    """
+    if not path:
+        return False
+    ziel = os.path.realpath(path)
+    basis = os.path.realpath(EXPORT_DIR)
+    try:
+        if os.path.commonpath([ziel, basis]) != basis:
+            return False
+    except ValueError:
+        # Unterschiedliche Laufwerke — kann nicht innerhalb von EXPORT_DIR sein.
+        return False
+    try:
+        os.remove(ziel)
+        return True
+    except OSError:
+        return False
+
+
 def _pluralize(word):
     """Return the German plural form for a package type description."""
     if not word:
