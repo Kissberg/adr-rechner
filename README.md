@@ -251,10 +251,35 @@ hartcodierten Geheimnisse mehr im Quellcode.
 | `SECRET_KEY` | **ja** | zufällig | Sitzungsschlüssel. Ohne Wert werden nach jedem Neustart alle Anmeldungen ungültig. |
 | `AUTH_ENABLED` | nein | `1` | `0` schaltet die Anmeldung ab — **nur für lokale Entwicklung**. |
 | `ADR_ADMIN_USER` | nein | `admin` | Benutzername des ersten Administrators. |
-| `ADR_ADMIN_PASSWORD` | nein | zufällig | Passwort des ersten Administrators. Ohne Wert wird ein zufälliges erzeugt und **einmalig im Log ausgegeben**. |
+| `ADR_ADMIN_PASSWORD` | nein | zufällig | Passwort des ersten Administrators. Ohne Wert wird ein zufälliges erzeugt und in `.admin_password` im Datenverzeichnis abgelegt (**nicht** im Log). |
+| `ADR_REQUIRE_ADMIN_PASSWORD` | nein | `0` | `1` verweigert den Start, wenn `ADR_ADMIN_PASSWORD` fehlt — **im Produktivbetrieb empfohlen**. |
+| `ADR_ADMIN_PASSWORD_FILE` | nein | `<Datenverz>/.admin_password` | Alternativer Ort für die Passwortdatei. |
 | `PREFER_SECURE_COOKIE` | nein | `0` | `1` setzt `Secure` am Session-Cookie — **bei HTTPS/Betrieb hinter Reverse-Proxy setzen**. |
 | `MAX_UPLOAD_MB` | nein | `50` | Obergrenze für PDF-/Excel-Uploads (Schutz vor Ressourcenerschöpfung). |
 | `ADR_HOST` / `ADR_PORT` | nein | `127.0.0.1` / `5050` | Nur für `python app.py`. `ADR_HOST=0.0.0.0` ist ohne Reverse-Proxy nicht zulässig. |
+
+### Warum das erzeugte Passwort nicht im Log steht
+
+Wird kein `ADR_ADMIN_PASSWORD` gesetzt, erzeugt die Anwendung ein
+Zufallspasswort und schreibt es in `.admin_password` im Datenverzeichnis.
+Das Log nennt nur den Pfad, niemals das Passwort selbst.
+
+Der Grund: Logs sind grundsätzlich **breiter lesbar und länger verfügbar**
+als die Anwendung. `docker logs` zeigt sie jedem mit Docker-Zugang, der
+`json-file`-Treiber hält sie in drei Rotationen à 10 MB vor, und in
+Betrieben mit ELK/Loki/Grafana sind sie wochenlang durchsuchbar — für
+deutlich mehr Personen als die Datenbank. Ein einmalig erzeugtes
+Administratorpasswort im Log wäre faktisch ein dauerhaft gültiger
+Admin-Zugang für alle, die Logs lesen dürfen.
+
+Die Datei wird mit Rechten nur für den Besitzer angelegt (Unix `0600`,
+unter Windows per `icacls` auf das eigene Konto beschränkt) und nach dem
+ersten Passwortwechsel automatisch gelöscht. Kann sie nicht geschrieben
+werden, **verweigert die Anwendung den Start** — sie fällt nicht darauf
+zurück, das Passwort doch ins Log zu schreiben.
+
+Für den Produktivbetrieb `ADR_REQUIRE_ADMIN_PASSWORD=1` setzen: Dann
+verweigert die Anwendung den Start, solange kein Passwort gesetzt ist.
 
 ### Rollen
 
@@ -273,6 +298,7 @@ docker run -d \
   -v adr_exports:/app/exports \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   -e ADR_ADMIN_PASSWORD="<starkes-passwort>" \
+  -e ADR_REQUIRE_ADMIN_PASSWORD=1 \
   -e PREFER_SECURE_COOKIE=1 \
   kissberg/adr-rechner:latest
 ```

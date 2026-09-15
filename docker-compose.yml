@@ -21,6 +21,9 @@ services:
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY muss gesetzt werden}
       - ADR_ADMIN_USER=${ADR_ADMIN_USER:-admin}
       - ADR_ADMIN_PASSWORD=${ADR_ADMIN_PASSWORD:-}
+      # Im Produktivbetrieb auf 1 setzen: Dann startet der Container nicht,
+      # wenn ADR_ADMIN_PASSWORD fehlt, statt ein Passwort zu erzeugen.
+      - ADR_REQUIRE_ADMIN_PASSWORD=${ADR_REQUIRE_ADMIN_PASSWORD:-0}
       - PREFER_SECURE_COOKIE=${PREFER_SECURE_COOKIE:-1}
       - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-50}
     logging:

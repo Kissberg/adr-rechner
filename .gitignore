@@ -7,6 +7,11 @@ __pycache__/
 data/adr.db
 data/*.db
 data/_test_bp.pdf
+# Erzeugtes Anfangspasswort des ersten Administrators. Darf unter keinen
+# Umständen ins Repository — es steht stellvertretend für einen gültigen
+# Admin-Zugang.
+.admin_password
+data/.admin_password
 exports/
 adr_exports/
 .pytest_cache/
