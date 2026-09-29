@@ -112,6 +112,13 @@ function render(users) {
         );
 
         actions.push(
+            '<button class="btn btn-sm btn-outline-info me-1" ' +
+            'data-act="email" data-id="' + u.id + '" data-name="' + esc(u.username) + '" ' +
+            'data-email="' + esc(u.email || '') + '" title="E-Mail-Adresse ändern">' +
+            '<i class="bi bi-envelope"></i></button>'
+        );
+
+        actions.push(
             '<button class="btn btn-sm btn-outline-danger" ' +
             'data-act="delete" data-id="' + u.id + '" data-name="' + esc(u.username) + '" ' +
             'title="Endgültig löschen"' +
@@ -269,6 +276,35 @@ document.getElementById('delDo')?.addEventListener('click', async function () {
     delTarget = null;
 });
 
+/* E-Mail-Adresse ändern (Zustelladresse des Anfangspassworts) */
+let mailTarget = null;
+
+document.getElementById('mailSave')?.addEventListener('click', async function () {
+    if (!mailTarget) return;
+    const box = document.getElementById('mailAlert');
+    box.classList.add('d-none');
+
+    this.disabled = true;
+    const result = await api('/api/users/' + mailTarget.id, {
+        method: 'PUT',
+        body: JSON.stringify({email: document.getElementById('mailValue').value.trim()})
+    });
+    this.disabled = false;
+
+    if (!result.ok) {
+        showAlert(box, 'danger', result.data.error || 'Speichern fehlgeschlagen.');
+        return;
+    }
+
+    bootstrap.Modal.getInstance(document.getElementById('mailModal')).hide();
+    await loadUsers();
+    showAlert(document.getElementById('pageAlert'), 'success',
+              'E-Mail-Adresse für „' + mailTarget.name + '“ ist jetzt '
+              + (result.data.email ? result.data.email : 'nicht hinterlegt')
+              + '.');
+    mailTarget = null;
+});
+
 document.getElementById('showPwCopy')?.addEventListener('click', function () {
     const input = document.getElementById('showPwValue');
     input.select();
@@ -291,6 +327,15 @@ document.getElementById('userRows')?.addEventListener('click', async function (e
         document.getElementById('pwAlert2').classList.add('d-none');
         document.getElementById('pwValue').value = '';
         new bootstrap.Modal(document.getElementById('pwModal')).show();
+        return;
+    }
+
+    if (act === 'email') {
+        mailTarget = {id: id, name: name};
+        document.getElementById('mailUser').textContent = name;
+        document.getElementById('mailValue').value = btn.dataset.email || '';
+        document.getElementById('mailAlert').classList.add('d-none');
+        new bootstrap.Modal(document.getElementById('mailModal')).show();
         return;
     }
 

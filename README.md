@@ -264,7 +264,7 @@ hartcodierten Geheimnisse mehr im Quellcode.
 | `AUTH_ENABLED` | nein | `1` | `0` schaltet die Anmeldung ab — **nur für lokale Entwicklung**. |
 | `ADR_ADMIN_USER` | nein | `admin` | Benutzername des ersten Administrators. |
 | `ADR_ADMIN_PASSWORD` | nein | `admin` | Startpasswort des **ersten** Administrators. Der Wechsel ist bei der ersten Anmeldung erzwungen. Ohne Wert gilt der dokumentierte Erstzugang `admin`/`admin`. |
-| `ADR_SMTP_HOST` | nein | `smtp.ionos.de` | Mailserver für die Zustellung von Anfangspasswörtern. |
+| `ADR_SMTP_HOST` | nein | `smtp.ionos.de` | Mailserver für die Zustellung von Anfangspasswörtern. **Optional** — ohne Versand werden Passwörter persönlich übergeben. |
 | `ADR_SMTP_PORT` | nein | `587` | Port (STARTTLS). |
 | `ADR_SMTP_USER` | für Versand | — | Postfach für den Versand. Fehlt der Wert, gilt der Versand als nicht eingerichtet. |
 | `ADR_SMTP_PASSWORD` | für Versand | — | Passwort des Postfachs. |
@@ -337,23 +337,32 @@ Der Erstzugang wird **nur in eine leere Benutzertabelle** geschrieben. Ein
 gelöschter oder umbenannter `admin` taucht nicht bei jedem Neustart wieder
 auf — dafür gibt es `manage.py bootstrap-admin`.
 
-### Anfangspasswörter per E-Mail
+### Startpasswort: vorgeben oder erzeugen — Mailserver ist optional
 
-Wird beim Anlegen eines Kontos kein Passwort vorgegeben, erzeugt die
-Anwendung eines und sendet es an die hinterlegte E-Mail-Adresse. Der
-Administrator erfährt das Passwort damit nicht — die Nutzung ist von Anfang
-an personenbezogen, und es gibt keine Zettelübergabe.
+Beim Anlegen eines Kontos gibt es zwei Wege, beide enden gleich: die Person
+**muss** das Startpasswort bei der ersten Anmeldung ersetzen und kann bis
+dahin nichts anderes tun.
 
-Dafür sind `ADR_SMTP_USER` und `ADR_SMTP_PASSWORD` zu setzen (Standard:
-`smtp.ionos.de:587`, STARTTLS). Mit `ADR_MAIL_APP_URL` wird der
-Anmeldelink in die Nachricht aufgenommen.
+* **Vorgeben:** Der Administrator trägt ein Startpasswort ein (mindestens
+  12 Zeichen, darf den Benutzernamen nicht enthalten) und übergibt es
+  persönlich. Die Anwendung erfährt es nicht als „neu" und zeigt es nicht an.
+* **Erzeugen lassen:** Das Feld bleibt leer. Die Anwendung erzeugt ein
+  Passwort und zeigt es **genau einmal** an — im Bildschirm oder, wenn ein
+  Versand eingerichtet ist, per E-Mail an die hinterlegte Adresse.
 
-Ist kein Versand eingerichtet, scheitert das Anlegen **nicht**: das
-erzeugte Passwort wird dann einmalig auf dem Bildschirm angezeigt, und die
-Benutzerverwaltung weist oben auf die fehlende Konfiguration hin. Ein
-Zustellfehler (falsches Postfachpasswort, abgelehnter Empfänger) lässt das
-Konto ebenfalls bestehen; die Meldung nennt den technischen Grund.
-**Niemals im Log** — weder das Passwort noch der Nachrichteninhalt.
+**Ein Mailserver ist damit optional.** Ohne `ADR_SMTP_USER` und
+`ADR_SMTP_PASSWORD` läuft alles wie beschrieben; die Benutzerverwaltung weist
+lediglich darauf hin, dass Anfangspasswörter persönlich übergeben werden.
+Ist ein Versand eingerichtet (Standard `smtp.ionos.de:587`, STARTTLS,
+`ADR_MAIL_APP_URL` setzt den Anmeldelink), geht ein *erzeugtes* Passwort an
+die Adresse; ein *vorgegebenes* wird nie per E-Mail verschickt.
+
+Die E-Mail-Adresse ist ebenfalls optional und nachträglich korrigierbar
+(Stift-Symbol in der Benutzerverwaltung) — eine falsch geschriebene Adresse
+würde den Versand sonst dauerhaft ins Leere laufen lassen. Ein
+Zustellfehler lässt das Konto bestehen und wird als technischer Grund
+gemeldet. **Niemals im Log** — weder das Passwort noch der
+Nachrichteninhalt.
 
 ### Rollen
 

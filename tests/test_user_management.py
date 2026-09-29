@@ -145,16 +145,90 @@ def test_benutzername_mit_ungueltigen_zeichen_wird_abgelehnt(client):
     assert res.status_code == 400
 
 
-def test_fehlende_email_wird_abgelehnt(client):
-    """Ohne Zustelladresse kann das Anfangspasswort nicht zugestellt werden."""
-    res = client.post("/api/users", json={"username": "muenchen01"})
+def test_konto_ohne_email_ist_moeglich(client):
+    """Der Mailserver ist optional — das Konto entsteht trotzdem."""
+    res = client.post("/api/users", json={"username": "muenchen01",
+                                          "role": "user",
+                                          "password": "Startwort-Fuer-Muenchen"})
+    assert res.status_code == 201
+    data = res.get_json()
+    assert data["email"] is None
+    assert data["email_sent"] is False
+    # Kein erzeugtes Passwort in der Antwort, weil der Administrator
+    # selbst eines vergeben hat.
+    assert data["generated_password"] is None
+
+    rows = _rows(_db_path(),
+                 "SELECT email FROM users WHERE username = 'muenchen01'")
+    assert rows[0]["email"] is None
+
+
+def test_vorgegebenes_passwort_erzwingt_wechsel_beim_ersten_login(client):
+    start = "Startwort-Fuer-Muenchen"
+    assert client.post("/api/users", json={
+        "username": "muenchen01", "role": "user", "password": start},
+    ).status_code == 201
+
+    client.get("/auth/logout")
+    client.post("/auth/login", data={"username": "muenchen01", "password": start})
+    # Erst wechseln, dann arbeiten.
+    assert client.get("/api/kunden").status_code == 403
+    assert client.post("/auth/password", json={
+        "old_password": start, "new_password": USER_PW,
+        "confirm_password": USER_PW}).status_code == 200
+    assert client.get("/api/kunden").status_code == 200
+
+
+def test_vorgegebenes_passwort_muss_die_richtlinie_erfuellen(client):
+    res = client.post("/api/users", json={"username": "muenchen01",
+                                          "role": "user", "password": "kurz"})
     assert res.status_code == 400
-    assert "E-Mail" in res.get_json()["error"]
 
 
 def test_ungueltige_email_wird_abgelehnt(client):
     res = _neu(client, email="keine-adresse")
     assert res.status_code == 400
+
+
+def test_email_kann_nachtraeglich_geaendert_werden(client):
+    _neu(client, email="tippfehler@musterbetrieb.de")
+    uid = _id_of("muenchen01")
+
+    res = client.put(f"/api/users/{uid}", json={"email": "richtig@musterbetrieb.de"})
+    assert res.status_code == 200
+    assert res.get_json()["email"] == "richtig@musterbetrieb.de"
+    rows = _rows(_db_path(),
+                 "SELECT email FROM users WHERE id = ?", (uid,))
+    assert rows[0]["email"] == "richtig@musterbetrieb.de"
+
+
+def test_geaenderte_email_wird_geprueft(client):
+    _neu(client)
+    uid = _id_of("muenchen01")
+    res = client.put(f"/api/users/{uid}", json={"email": "keine-adresse"})
+    assert res.status_code == 400
+    # Unverändert geblieben.
+    rows = _rows(_db_path(), "SELECT email FROM users WHERE id = ?", (uid,))
+    assert rows[0]["email"] == MAIL
+
+
+def test_email_kann_geleert_werden(client):
+    _neu(client)
+    uid = _id_of("muenchen01")
+    res = client.put(f"/api/users/{uid}", json={"email": ""})
+    assert res.status_code == 200
+    rows = _rows(_db_path(), "SELECT email FROM users WHERE id = ?", (uid,))
+    assert rows[0]["email"] is None
+
+
+def test_email_aenderung_wird_protokolliert(client):
+    _neu(client)
+    uid = _id_of("muenchen01")
+    client.put(f"/api/users/{uid}", json={"email": "neu@musterbetrieb.de"})
+    eintraege = _rows(_db_path(),
+                      "SELECT detail FROM audit_log WHERE entity = 'user' AND "
+                      "entity_id = ? AND action = 'update'", (uid,))
+    assert any("email" in (e["detail"] or "") for e in eintraege)
 
 
 def test_doppelter_benutzername_wird_abgelehnt(client):

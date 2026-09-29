@@ -557,12 +557,18 @@ def api_users_list():
 def api_users_create():
     """Legt ein Benutzerkonto an.
 
-    Erwartet Benutzername, E-Mail-Adresse und Rolle. Ohne Passwort im
-    Request wird eines erzeugt und **per E-Mail an die betroffene Person**
-    gesendet — der Administrator erfährt es nicht. Nur wenn kein
-    E-Mail-Versand eingerichtet ist, kommt das erzeugte Passwort ersatzweise
-    einmalig in der Antwort zurück (nicht im Log), damit die Einrichtung
-    nicht an der fehlenden Konfiguration scheitert.
+    Pflicht sind Benutzername und Rolle. Das Startpasswort kann der
+    Administrator vorgeben; bleibt das Feld leer, erzeugt die Anwendung
+    eines und zeigt es **einmalig in der Antwort** (nicht im Log).
+
+    Die E-Mail-Adresse ist optional: ist ein Versand eingerichtet
+    (mailer.smtp_configured()), geht ein erzeugtes Passwort an diese
+    Adresse — sonst wird es am Bildschirm übergeben. Ein Konto lässt sich
+    also ohne Mailserver anlegen.
+
+    In jedem Fall entsteht das Konto mit must_change_password = 1: die
+    Person muss das Startpasswort bei der ersten Anmeldung ersetzen, sonst
+    kennt der Administrator dauerhaft ein fremdes Passwort.
     """
     from flask import jsonify
     me = current_user()
@@ -580,9 +586,10 @@ def api_users_create():
                                  "Bindestrich und Unterstrich enthalten."}), 400
     if role not in VALID_ROLES:
         return jsonify({"error": f"Unbekannte Rolle: {role}"}), 400
-    problem = _validate_email(email)
-    if problem:
-        return jsonify({"error": problem}), 400
+    if email:
+        problem = _validate_email(email)
+        if problem:
+            return jsonify({"error": problem}), 400
 
     if not password:
         password = secrets.token_urlsafe(12)
@@ -609,7 +616,7 @@ def api_users_create():
             "VALUES (?, ?, ?, 1, 1, ?, ?, ?)",
             (username, generate_password_hash(password), role,
              datetime.now().isoformat(timespec="seconds"), me["username"],
-             email),
+             email or None),
         )
         new_id = cur.lastrowid
         conn.commit()
@@ -617,9 +624,10 @@ def api_users_create():
         conn.close()
 
     # Versand erst nach dem Anlegen: ein Zustellfehler darf das Konto nicht
-    # wieder verschwinden lassen.
+    # wieder verschwinden lassen. Ohne Adresse oder ohne Versandkonfiguration
+    # wird nicht versucht zuzustellen — das ist der Regelfall.
     sent, reason = False, None
-    if generated:
+    if generated and email:
         sent, reason = mailer.send_initial_password(
             email, username, password, role, reason="neu",
             actor=me["username"])
@@ -627,20 +635,23 @@ def api_users_create():
     if sent:
         zustellung = f"Das Anfangspasswort wurde an {email} gesendet."
     elif generated:
-        zustellung = (f"Kein E-Mail-Versand ({reason}) — das Anfangspasswort "
-                      f"wird jetzt einmalig angezeigt.")
+        zustellung = ("Das Anfangspasswort wird jetzt einmalig angezeigt — "
+                      "bitte sofort weitergeben.")
     else:
-        zustellung = ("Das vorgegebene Passwort bitte selbst weitergeben; es "
-                      "muss bei der ersten Anmeldung geändert werden.")
+        zustellung = ("Das vorgegebene Passwort bitte weitergeben; es muss bei "
+                      "der ersten Anmeldung geändert werden.")
 
     audit.log(audit.CREATE, "user", new_id,
-              f"Benutzer „{username}” ({email}) mit Rolle {role} angelegt; "
+              f"Benutzer „{username}”"
+              + (f" ({email})" if email else "")
+              + f" mit Rolle {role} angelegt; "
               + ("Anfangspasswort per E-Mail zugestellt" if sent
-                 else "Anfangspasswort einmalig angezeigt"))
+                 else ("Anfangspasswort vom Administrator vergeben" if not generated
+                       else "Anfangspasswort einmalig angezeigt")))
     return jsonify({
         "id": new_id,
         "username": username,
-        "email": email,
+        "email": email or None,
         "role": role,
         "email_sent": sent,
         "email_error": reason,
@@ -653,7 +664,7 @@ def api_users_create():
 @login_required
 @role_required(ROLE_ADMIN)
 def api_users_update(user_id: int):
-    """Ändert Rolle und Aktivstatus eines Kontos."""
+    """Ändert Rolle, Aktivstatus und E-Mail-Adresse eines Kontos."""
     from flask import jsonify
     me = current_user()
     data = request.get_json(force=True, silent=True) or {}
@@ -666,9 +677,24 @@ def api_users_update(user_id: int):
 
         new_role = data.get("role", row["role"])
         new_active = data.get("active", bool(row["active"]))
+        old_email = row["email"] if "email" in row.keys() else None
+        new_email = (data.get("email") if data.get("email") is not None
+                     else old_email)
+        new_email = (new_email or "").strip() or None
 
         if new_role not in VALID_ROLES:
             return jsonify({"error": f"Unbekannte Rolle: {new_role}"}), 400
+        if "email" in data:
+            # Eine falsch geschriebene Adresse würde den Versand von
+            # Anfangspasswörtern dauerhaft ins Leere laufen lassen — die
+            # Korrektur muss also möglich sein, aber geprüft. Ein leerer Wert
+            # nimmt die Adresse wieder heraus und ist zulässig.
+            roh = (data.get("email") or "").strip()
+            if roh:
+                problem = _validate_email(roh)
+                if problem:
+                    return jsonify({"error": problem}), 400
+            new_email = roh or None
 
         # Aussperr-Schutz: sonst kann sich der letzte Administrator selbst
         # die Rechte entziehen und niemand kommt mehr an die Verwaltung.
@@ -682,18 +708,21 @@ def api_users_update(user_id: int):
                                      "nicht herabgestuft oder deaktiviert "
                                      "werden."}), 400
 
-        conn.execute("UPDATE users SET role = ?, active = ? WHERE id = ?",
-                     (new_role, 1 if new_active else 0, user_id))
+        conn.execute("UPDATE users SET role = ?, active = ?, email = ? WHERE id = ?",
+                     (new_role, 1 if new_active else 0, new_email, user_id))
         conn.commit()
     finally:
         conn.close()
 
-    changes = audit.diff_text(dict(row), {"role": new_role, "active": new_active},
-                              ("role", "active"))
+    changes = audit.diff_text({"role": row["role"], "active": bool(row["active"]),
+                               "email": old_email},
+                              {"role": new_role, "active": new_active,
+                               "email": new_email},
+                              ("role", "active", "email"))
     if changes:
         audit.log(audit.UPDATE, "user", user_id,
                   f"Benutzer „{row['username']}”: {changes}")
-    return jsonify({"ok": True, "id": user_id})
+    return jsonify({"ok": True, "id": user_id, "email": new_email})
 
 
 @users_bp.route("/api/users/<int:user_id>", methods=["DELETE"])

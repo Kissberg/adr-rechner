@@ -19,12 +19,13 @@
 <div id="pageAlert" class="alert d-none"></div>
 
 {% if not mail_configured %}
-<div class="alert alert-warning">
-    <strong>E-Mail-Versand ist nicht eingerichtet.</strong>
-    Anfangspasswörter können deshalb nicht zugesendet werden; sie werden
-    einmalig auf dem Bildschirm angezeigt. Für den Versand sind
-    <code>ADR_SMTP_USER</code> und <code>ADR_SMTP_PASSWORD</code> zu setzen
-    (siehe Handbuch).
+<div class="alert alert-info">
+    <strong>Kein E-Mail-Versand eingerichtet — das ist in Ordnung.</strong>
+    Anfangspasswörter werden beim Anlegen einmalig auf dem Bildschirm
+    angezeigt und von Ihnen weitergegeben. Optional kann die Zustellung per
+    E-Mail eingerichtet werden (<code>ADR_SMTP_USER</code> und
+    <code>ADR_SMTP_PASSWORD</code>, siehe Handbuch); dann erhält die Person
+    ihr Startpasswort selbst.
 </div>
 {% endif %}
 
@@ -84,12 +85,16 @@
                     </div>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label" for="neuEmail">E-Mail-Adresse</label>
+                    <label class="form-label" for="neuEmail">
+                        E-Mail-Adresse <span class="text-muted">(optional)</span>
+                    </label>
                     <input type="email" class="form-control" id="neuEmail"
                            placeholder="z. B. m.mustermann@firma.de"
                            autocomplete="off">
                     <div class="form-text">
-                        Zustelladresse für das Anfangspasswort.
+                        Nur nötig, wenn das Anfangspasswort per E-Mail
+                        zugestellt werden soll. Ohne Adresse zeigen Sie es
+                        einmalig an.
                     </div>
                 </div>
                 <div class="mb-3">
@@ -101,17 +106,18 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label" for="neuPw">
-                        Anfangspasswort <span class="text-muted">(optional)</span>
+                        Startpasswort <span class="text-muted">(optional)</span>
                     </label>
                     <input type="text" class="form-control" id="neuPw"
                            autocomplete="off"
-                           placeholder="Leer lassen — wird erzeugt und gemailt">
+                           placeholder="Leer lassen — wird erzeugt und angezeigt">
                     <div class="form-text">
-                        Bleibt das Feld leer, erzeugt die Anwendung ein
-                        Passwort und sendet es an die Adresse oben. Mindestens
-                        {{ min_password_length }} Zeichen, wenn Sie selbst
-                        eines vorgeben. In jedem Fall muss die Person es bei
-                        der ersten Anmeldung ändern.
+                        Sie können hier ein Passwort vorgeben und persönlich
+                        übergeben (mindestens {{ min_password_length }}
+                        Zeichen, darf den Benutzernamen nicht enthalten).
+                        Bleibt das Feld leer, erzeugt die Anwendung eines und
+                        zeigt es einmalig an. <strong>In jedem Fall muss die
+                        Person es bei der ersten Anmeldung ändern.</strong>
                     </div>
                 </div>
             </div>
@@ -155,6 +161,37 @@
                 <button type="button" class="btn btn-warning" id="pwReset">
                     Passwort zurücksetzen
                 </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="mailModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">E-Mail-Adresse für <span id="mailUser"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"
+                        aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <div id="mailAlert" class="alert d-none"></div>
+                <div class="mb-3">
+                    <label class="form-label" for="mailValue">E-Mail-Adresse</label>
+                    <input type="email" class="form-control" id="mailValue"
+                           autocomplete="off" placeholder="leer lassen = keine Adresse">
+                </div>
+                <p class="small text-muted mb-0">
+                    Adresse für die Zustellung von Anfangspasswörtern. Eine
+                    falsch geschriebene Adresse lässt den Versand ins Leere
+                    laufen — deshalb hier korrigierbar.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    Abbrechen
+                </button>
+                <button type="button" class="btn btn-primary" id="mailSave">Speichern</button>
             </div>
         </div>
     </div>
