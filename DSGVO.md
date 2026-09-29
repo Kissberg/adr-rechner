@@ -147,8 +147,9 @@ abhängt.
 | Löschung | Kunden, Sendungen, zugehörige PDF-Dateien **und Benutzerkonten** sind löschbar (Art. 17) |
 | Betroffenenrechte | Datenauskunft als JSON je Kunde herunterladbar |
 | Erstzugang | Erster Administrator `admin`/`admin`; der Wechsel ist bei der ersten Anmeldung erzwungen und alle anderen Routen sind bis dahin gesperrt |
-| Keine Weitergabe von Passwörtern | Anfangspasswörter werden der betroffenen Person per E-Mail zugestellt, nicht dem Administrator angezeigt |
-| Fehlkonfiguration | Ohne `ADR_SMTP_USER`/`ADR_SMTP_PASSWORD` wird kein Passwort versendet; die Anwendung zeigt es einmalig an und weist auf die fehlende Konfiguration hin |
+| Keine Weitergabe von Passwörtern | Ein von der Anwendung erzeugtes Anfangspasswort geht per E-Mail an die betroffene Person und wird dem Administrator nicht angezeigt; ein selbst vorgegebenes übergibt er persönlich. Beide müssen bei der ersten Anmeldung ersetzt werden |
+| Zugangsdaten des Mailservers | Werden in der Anwendung gepflegt (Tabelle `settings`), sind nie in einer Antwort der Schnittstelle enthalten, stehen nicht in Umgebungsvariablen und damit nicht in `docker inspect` oder der Prozessliste |
+| Fehlkonfiguration | Ein unvollständig hinterlegter Mailversand führt nicht zum Fehler: das Anfangspasswort wird einmalig angezeigt und die Einstellungen prüfen die Angaben vor dem Speichern |
 
 ### Vom Betreiber sicherzustellen
 

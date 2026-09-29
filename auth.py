@@ -54,6 +54,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 import database
 import audit
 import mailer
+import settings_store
 from database import get_db
 
 ROLE_ADMIN = "admin"
@@ -528,6 +529,95 @@ def users_page():
     """Benutzerverwaltung."""
     return render_template("benutzer.html", title="Benutzerverwaltung",
                            mail_configured=mailer.smtp_configured())
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Einstellungen (nur Administratoren)
+# ─────────────────────────────────────────────────────────────────────
+#
+# Der Mailversand ist optional und wird hier eingerichtet — nicht über
+# Umgebungsvariablen. Damit bringt eine Auslieferung keine fremden
+# Zugangsdaten mit, und der Betrieb kann ein Postfach wechseln, ohne den
+# Container neu zu erzeugen.
+
+def _mail_settings_input(data: dict) -> tuple:
+    """Liest und prüft die Eingaben. Rückgabe (werte, fehler)."""
+    werte = {
+        "smtp_host": (data.get("smtp_host") or "").strip(),
+        "smtp_port": (str(data.get("smtp_port") or "587")).strip(),
+        "smtp_starttls": "1" if data.get("smtp_starttls", True) else "0",
+        "smtp_user": (data.get("smtp_user") or "").strip(),
+        "mail_from": (data.get("mail_from") or "").strip(),
+        "mail_app_name": (data.get("mail_app_name") or "").strip(),
+        "mail_app_url": (data.get("mail_app_url") or "").strip(),
+    }
+    if data.get("smtp_password"):
+        werte["smtp_password"] = data["smtp_password"]
+
+    # Port: eine unbrauchbare Angabe darf nicht gespeichert werden — sonst
+    # schlägt jeder Versand mit einem kryptischen Fehler fehl.
+    try:
+        port = int(werte["smtp_port"])
+    except ValueError:
+        return werte, "Der Port muss eine Zahl sein."
+    if not 1 <= port <= 65535:
+        return werte, "Der Port muss zwischen 1 und 65535 liegen."
+    if werte["mail_from"] and not EMAIL_PATTERN.match(werte["mail_from"]):
+        return werte, f"„{werte['mail_from']}” ist keine gültige Absenderadresse."
+    if werte["mail_app_url"] and not werte["mail_app_url"].startswith(("http://", "https://")):
+        return werte, "Die Adresse der Anwendung muss mit http:// oder https:// beginnen."
+    return werte, None
+
+
+@users_bp.route("/einstellungen")
+@login_required
+@role_required(ROLE_ADMIN)
+def settings_page():
+    """Seite für die Betriebseinstellungen."""
+    return render_template("einstellungen.html", title="Einstellungen",
+                           werte=settings_store.mail_public_settings(),
+                           mail_configured=mailer.smtp_configured())
+
+
+@users_bp.route("/api/settings/mail", methods=["GET"])
+@login_required
+@role_required(ROLE_ADMIN)
+def api_mail_settings_get():
+    from flask import jsonify
+    return jsonify(settings_store.mail_public_settings())
+
+
+@users_bp.route("/api/settings/mail", methods=["PUT"])
+@login_required
+@role_required(ROLE_ADMIN)
+def api_mail_settings_put():
+    """Speichert die Versandeinstellungen.
+
+    Das Passwort wird nie zurückgegeben. Ein leer gelassenes Passwort lässt
+    das gespeicherte stehen (die Oberfläche zeigt es nicht an);
+    `clear_password` entfernt es ausdrücklich.
+    """
+    from flask import jsonify
+    data = request.get_json(force=True, silent=True) or {}
+    werte, fehler = _mail_settings_input(data)
+    if fehler:
+        return jsonify({"error": fehler}), 400
+
+    me = current_user()
+    settings_store.set_mail_settings(
+        werte, actor=me["username"],
+        clear_password=bool(data.get("clear_password")))
+    return jsonify(settings_store.mail_public_settings())
+
+
+@users_bp.route("/api/settings/mail/test", methods=["POST"])
+@login_required
+@role_required(ROLE_ADMIN)
+def api_mail_settings_test():
+    """Prüft die Zugangsdaten — ohne eine Nachricht zu senden."""
+    from flask import jsonify
+    ok, meldung = mailer.test_connection()
+    return jsonify({"ok": ok, "message": meldung})
 
 
 @users_bp.route("/api/users", methods=["GET"])

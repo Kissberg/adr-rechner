@@ -21,16 +21,10 @@ services:
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY muss gesetzt werden}
       - ADR_ADMIN_USER=${ADR_ADMIN_USER:-admin}
       - ADR_ADMIN_PASSWORD=${ADR_ADMIN_PASSWORD:-}
-      # E-Mail-Versand der Anfangspasswörter. Ohne ADR_SMTP_USER und
-      # ADR_SMTP_PASSWORD gilt der Versand als nicht eingerichtet: das
-      # erzeugte Passwort wird dann einmalig im Bildschirm angezeigt.
-      - ADR_SMTP_HOST=${ADR_SMTP_HOST:-smtp.ionos.de}
-      - ADR_SMTP_PORT=${ADR_SMTP_PORT:-587}
-      - ADR_SMTP_USER=${ADR_SMTP_USER:-}
-      - ADR_SMTP_PASSWORD=${ADR_SMTP_PASSWORD:-}
-      - ADR_MAIL_FROM=${ADR_MAIL_FROM:-}
-      - ADR_MAIL_APP_NAME=${ADR_MAIL_APP_NAME:-ADR 1000-Punkte-Rechner}
-      - ADR_MAIL_APP_URL=${ADR_MAIL_APP_URL:-}
+      # E-Mail-Versand: wird NICHT hier konfiguriert, sondern in der
+      # Anwendung unter "Einstellungen" (nur Administratoren). Damit bringt
+      # das Image keine fremden Zugangsdaten mit und ein Postfachwechsel
+      # braucht keinen neuen Container.
       - PREFER_SECURE_COOKIE=${PREFER_SECURE_COOKIE:-1}
       - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-50}
       # Passwortrichtlinie und Schutz gegen Raten

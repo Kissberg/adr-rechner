@@ -157,8 +157,6 @@ docker run -d \
   -v adr_data:/app/data \
   -v adr_exports:/app/exports \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
-  -e ADR_SMTP_USER="<postfach@betrieb.de>" \
-  -e ADR_SMTP_PASSWORD="<postfachpasswort>" \
   kissberg/adr-rechner:latest
 ```
 
@@ -186,12 +184,6 @@ services:
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY muss gesetzt werden}
       - ADR_ADMIN_USER=${ADR_ADMIN_USER:-admin}
       - ADR_ADMIN_PASSWORD=${ADR_ADMIN_PASSWORD:-}
-      - ADR_SMTP_HOST=${ADR_SMTP_HOST:-smtp.ionos.de}
-      - ADR_SMTP_PORT=${ADR_SMTP_PORT:-587}
-      - ADR_SMTP_USER=${ADR_SMTP_USER:-}
-      - ADR_SMTP_PASSWORD=${ADR_SMTP_PASSWORD:-}
-      - ADR_MAIL_FROM=${ADR_MAIL_FROM:-}
-      - ADR_MAIL_APP_URL=${ADR_MAIL_APP_URL:-}
 
 volumes:
   adr_data:
@@ -264,14 +256,7 @@ hartcodierten Geheimnisse mehr im Quellcode.
 | `AUTH_ENABLED` | nein | `1` | `0` schaltet die Anmeldung ab — **nur für lokale Entwicklung**. |
 | `ADR_ADMIN_USER` | nein | `admin` | Benutzername des ersten Administrators. |
 | `ADR_ADMIN_PASSWORD` | nein | `admin` | Startpasswort des **ersten** Administrators. Der Wechsel ist bei der ersten Anmeldung erzwungen. Ohne Wert gilt der dokumentierte Erstzugang `admin`/`admin`. |
-| `ADR_SMTP_HOST` | nein | `smtp.ionos.de` | Mailserver für die Zustellung von Anfangspasswörtern. **Optional** — ohne Versand werden Passwörter persönlich übergeben. |
-| `ADR_SMTP_PORT` | nein | `587` | Port (STARTTLS). |
-| `ADR_SMTP_USER` | für Versand | — | Postfach für den Versand. Fehlt der Wert, gilt der Versand als nicht eingerichtet. |
-| `ADR_SMTP_PASSWORD` | für Versand | — | Passwort des Postfachs. |
-| `ADR_MAIL_FROM` | nein | `ADR_SMTP_USER` | Absenderadresse. |
-| `ADR_MAIL_APP_NAME` | nein | `ADR 1000-Punkte-Rechner` | Name in Betreff und Signatur. |
-| `ADR_MAIL_APP_URL` | nein | — | Adresse der Anwendung für den Anmeldelink in der E-Mail. |
-| `ADR_SMTP_STARTTLS` | nein | `1` | `0` verwendet implizites TLS (`SMTP_SSL`, z. B. Port 465). |
+| `ADR_MAIL_*`, `ADR_SMTP_*` | — | — | **entfallen.** Der Mailversand wird in der Anwendung unter „Einstellungen" gepflegt (nur Administratoren), nicht über die Umgebung. |
 | `ADR_PASSWORD_MIN_LENGTH` | nein | `12` | Mindestlänge neuer Passwörter (kleiner als 8 wird nicht akzeptiert). |
 | `ADR_MAX_LOGIN_ATTEMPTS` | nein | `10` | Fehlversuche, nach denen ein Konto gesperrt wird. |
 | `ADR_LOGIN_LOCKOUT_MINUTES` | nein | `15` | Dauer der Sperre. |
@@ -350,16 +335,26 @@ dahin nichts anderes tun.
   Passwort und zeigt es **genau einmal** an — im Bildschirm oder, wenn ein
   Versand eingerichtet ist, per E-Mail an die hinterlegte Adresse.
 
-**Ein Mailserver ist damit optional.** Ohne `ADR_SMTP_USER` und
-`ADR_SMTP_PASSWORD` läuft alles wie beschrieben; die Benutzerverwaltung weist
-lediglich darauf hin, dass Anfangspasswörter persönlich übergeben werden.
-Ist ein Versand eingerichtet (Standard `smtp.ionos.de:587`, STARTTLS,
-`ADR_MAIL_APP_URL` setzt den Anmeldelink), geht ein *erzeugtes* Passwort an
-die Adresse; ein *vorgegebenes* wird nie per E-Mail verschickt.
+**Ein Mailserver ist damit optional.** Ohne hinterlegte Zugangsdaten läuft
+alles wie beschrieben; die Benutzerverwaltung weist lediglich darauf hin,
+dass Anfangspasswörter persönlich übergeben werden.
+
+Die Zugangsdaten des Mailservers gehören **nicht** in die
+Container-Konfiguration, sondern werden von einem Administrator in der
+Anwendung unter **Einstellungen** (Menü oben rechts) gepflegt: Server, Port,
+STARTTLS, Postfach, Passwort, Absenderadresse, Name der Anwendung und die
+Adresse der Anwendung für den Anmeldelink. Sie liegen in der Tabelle
+`settings` dieser Instanz, wirken ohne Neustart, und ein Postfachwechsel
+braucht keinen neuen Container. Der Knopf „Verbindung testen" meldet sich am
+Mailserver an, **ohne** eine Nachricht zu senden. Das Postfachpasswort wird
+nie angezeigt und nie protokolliert; es verlässt die Anwendung nicht.
+
+Ein *erzeugtes* Passwort geht an die hinterlegte Adresse; ein vom
+Administrator *vorgegebenes* wird nie per E-Mail verschickt.
 
 Die E-Mail-Adresse ist ebenfalls optional und nachträglich korrigierbar
-(Stift-Symbol in der Benutzerverwaltung) — eine falsch geschriebene Adresse
-würde den Versand sonst dauerhaft ins Leere laufen lassen. Ein
+(Umschlag-Symbol in der Benutzerverwaltung) — eine falsch geschriebene
+Adresse würde den Versand sonst dauerhaft ins Leere laufen lassen. Ein
 Zustellfehler lässt das Konto bestehen und wird als technischer Grund
 gemeldet. **Niemals im Log** — weder das Passwort noch der
 Nachrichteninhalt.
@@ -434,8 +429,6 @@ docker run -d --name adr-muenchen \
   -v adr_muenchen_exports:/app/exports \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   -e ADR_ADMIN_PASSWORD="<starkes-passwort>" \
-  -e ADR_SMTP_USER="<postfach@betrieb.de>" \
-  -e ADR_SMTP_PASSWORD="<postfachpasswort>" \
   -e ADR_AUDIT_RETENTION_DAYS=3650 \
   kissberg/adr-rechner:latest
 
@@ -446,8 +439,6 @@ docker run -d --name adr-hamburg \
   -v adr_hamburg_exports:/app/exports \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   -e ADR_ADMIN_PASSWORD="<anderes-starkes-passwort>" \
-  -e ADR_SMTP_USER="<postfach@betrieb.de>" \
-  -e ADR_SMTP_PASSWORD="<postfachpasswort>" \
   kissberg/adr-rechner:latest
 ```
 
@@ -467,8 +458,6 @@ docker run -d \
   -v adr_data:/app/data \
   -v adr_exports:/app/exports \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
-  -e ADR_SMTP_USER="<postfach@betrieb.de>" \
-  -e ADR_SMTP_PASSWORD="<postfachpasswort>" \
   -e PREFER_SECURE_COOKIE=1 \
   -e ADR_AUDIT_RETENTION_DAYS=3650 \
   kissberg/adr-rechner:latest

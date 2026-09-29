@@ -1,78 +1,114 @@
 """
-mailer.py — E-Mail-Versand für Anfangspasswörter
+mailer.py — Versand von Anfangspasswörtern (optional)
 
-Zweck: Beim Anlegen eines Kontos wird das Anfangspasswort der betroffenen
-Person per E-Mail zugestellt, statt es am Bildschirm des Administrators
-auszugeben. Das Passwort ist ein Übergangswert: es muss bei der ersten
-Anmeldung ersetzt werden (must_change_password), damit der Administrator
-kein dauerhaft gültiges fremdes Passwort kennt.
+Zweck: Wird beim Anlegen eines Kontos kein Startpasswort vorgegeben, erzeugt
+die Anwendung eines und kann es der betroffenen Person per E-Mail zustellen.
+Das ist ein **optionaler Zusatzweg**: ohne eingerichteten Versand wird das
+Passwort einmalig im Bildschirm angezeigt.
+
+────────────────────────────────────────────────────────────────────────
+Woher die Zugangsdaten kommen
+────────────────────────────────────────────────────────────────────────
+Nicht aus Umgebungsvariablen, sondern aus der Tabelle `settings` —
+eingetragen von einem Administrator unter „Einstellungen" (siehe
+`settings_store.py`). Vorteile: kein Postfachpasswort in `docker inspect`
+oder in der Prozessliste, Änderungen wirken ohne Neustart, und eine
+Auslieferung bringt keine fremden Zugangsdaten mit.
+
+Ist nichts hinterlegt (`mail_settings_configured()` ist falsch), gilt der
+Versand als nicht eingerichtet. Dann wird **gar nicht** versucht zuzustellen
+und es entsteht auch keine Fehlermeldung: der Aufrufer zeigt das Passwort
+einfach an.
 
 ────────────────────────────────────────────────────────────────────────
 WICHTIG — das Passwort darf nicht ins Log
 ────────────────────────────────────────────────────────────────────────
 Logs sind breiter lesbar und länger verfügbar als die Anwendung selbst
-(`docker logs`, json-Dateien, zentrale Logsammler). Ein Anfangspasswort im
-Log wäre ein für alle Logleser sichtbarer Zugang. Diese Modul schreibt das
-Passwort deshalb niemals in eine Ausgabe und gibt bei Fehlern nur den
-technischen Grund zurück — nie den Inhalt der Nachricht.
-
-────────────────────────────────────────────────────────────────────────
-Konfiguration (Umgebungsvariablen)
-────────────────────────────────────────────────────────────────────────
-  ADR_SMTP_HOST      Standard: smtp.ionos.de
-  ADR_SMTP_PORT      Standard: 587 (STARTTLS)
-  ADR_SMTP_USER      Benutzername des Postfachs — ohne ihn gilt der
-                     Versand als NICHT konfiguriert
-  ADR_SMTP_PASSWORD  Postfachpasswort
-  ADR_MAIL_FROM      Absenderadresse, Standard: ADR_SMTP_USER
-  ADR_MAIL_APP_NAME  Name in Betreff und Signatur
-  ADR_MAIL_APP_URL   Adresse der Anwendung für den Anmeldelink (optional)
-  ADR_SMTP_STARTTLS  Standard 1; auf 0 setzen für implizites TLS (Port 465)
-
-Ist der Versand nicht konfiguriert, fällt die Anwendung auf das bisherige
-Verhalten zurück: das erzeugte Passwort wird einmalig im Bildschirm
-angezeigt, damit ein Konto auch ohne Postfach angelegt werden kann.
+(`docker logs`, json-Dateien, zentrale Logsammler). Diese Modul schreibt
+weder Passwort noch Nachrichteninhalt in eine Ausgabe und gibt bei Fehlern
+nur den technischen Grund zurück.
 """
 
 from __future__ import annotations
 
-import os
 import smtplib
 import ssl
 from email.message import EmailMessage
 
-DEFAULT_SMTP_HOST = "smtp.ionos.de"
-DEFAULT_SMTP_PORT = 587
-DEFAULT_APP_NAME = "ADR 1000-Punkte-Rechner"
+from settings_store import get_mail_settings, mail_settings_configured
 
 # Zeitlimit je Verbindungsaufbau: ein hängender Mailserver darf die
 # Weboberfläche nicht blockieren.
 SMTP_TIMEOUT_SECONDS = 15
 
 
-def _env(name: str, default: str = "") -> str:
-    return (os.environ.get(name) or "").strip() or default
-
-
 def smtp_config() -> dict:
-    """Liest die Versandkonfiguration aus der Umgebung."""
-    starttls = _env("ADR_SMTP_STARTTLS", "1").lower() not in ("0", "false", "no")
+    """Aktuelle Versandkonfiguration aus der Datenbank."""
+    cfg = get_mail_settings()
+    try:
+        port = int(cfg.get("smtp_port") or 587)
+    except (TypeError, ValueError):
+        port = 587
+    starttls = (cfg.get("smtp_starttls") or "1").strip().lower() \
+        not in ("0", "false", "no")
     return {
-        "host": _env("ADR_SMTP_HOST", DEFAULT_SMTP_HOST),
-        "port": int(_env("ADR_SMTP_PORT", str(DEFAULT_SMTP_PORT)) or DEFAULT_SMTP_PORT),
-        "user": _env("ADR_SMTP_USER"),
-        "password": os.environ.get("ADR_SMTP_PASSWORD") or "",
-        "mail_from": _env("ADR_MAIL_FROM") or _env("ADR_SMTP_USER"),
-        "app_name": _env("ADR_MAIL_APP_NAME", DEFAULT_APP_NAME),
-        "app_url": _env("ADR_MAIL_APP_URL"),
+        "host": (cfg.get("smtp_host") or "").strip(),
+        "port": port,
+        "user": (cfg.get("smtp_user") or "").strip(),
+        "password": cfg.get("smtp_password") or "",
+        "mail_from": (cfg.get("mail_from") or "").strip()
+        or (cfg.get("smtp_user") or "").strip(),
+        "app_name": (cfg.get("mail_app_name") or "").strip()
+        or "ADR 1000-Punkte-Rechner",
+        "app_url": (cfg.get("mail_app_url") or "").strip(),
         "starttls": starttls,
     }
 
 
 def smtp_configured() -> bool:
-    """Wahr, wenn Benutzer und Passwort für den Versand gesetzt sind."""
+    """Wahr, wenn Server, Benutzer, Passwort und Absender hinterlegt sind."""
+    return mail_settings_configured()
+
+
+def _connect(cfg: dict):
+    """Verbindet und meldet sich an. Der Aufrufer schließt die Verbindung."""
+    if cfg["starttls"]:
+        smtp = smtplib.SMTP(cfg["host"], cfg["port"],
+                            timeout=SMTP_TIMEOUT_SECONDS)
+        smtp.ehlo()
+        smtp.starttls(context=ssl.create_default_context())
+        smtp.ehlo()
+    else:
+        smtp = smtplib.SMTP_SSL(cfg["host"], cfg["port"],
+                                timeout=SMTP_TIMEOUT_SECONDS,
+                                context=ssl.create_default_context())
+    smtp.login(cfg["user"], cfg["password"])
+    return smtp
+
+
+def test_connection() -> tuple:
+    """Prüft die Zugangsdaten, **ohne** eine Nachricht zu senden.
+
+    Rückgabe (ok, Meldung). Die Meldung ist für die Oberfläche gedacht und
+    enthält niemals Zugangsdaten.
+    """
     cfg = smtp_config()
-    return bool(cfg["user"] and cfg["password"] and cfg["mail_from"])
+    if not smtp_configured():
+        return False, ("Es sind nicht alle Angaben hinterlegt (Server, "
+                       "Port, Benutzer, Passwort, Absender).")
+    try:
+        smtp = _connect(cfg)
+        try:
+            smtp.quit()
+        except (smtplib.SMTPException, OSError):
+            pass
+    except smtplib.SMTPAuthenticationError:
+        return False, ("Der Mailserver hat Benutzer oder Passwort abgelehnt. "
+                       "Bitte die Zugangsdaten prüfen.")
+    except (smtplib.SMTPException, OSError) as exc:
+        return False, (f"Keine Verbindung zu {cfg['host']}:"
+                       f"{cfg['port']} — {exc.__class__.__name__}")
+    return True, f"Verbindung zu {cfg['host']}:{cfg['port']} erfolgreich."
 
 
 def _body(cfg: dict, username: str, password: str, role: str,
@@ -128,7 +164,7 @@ def send_initial_password(to_email: str, username: str, password: str,
     if not to_email:
         return False, "Keine E-Mail-Adresse hinterlegt."
     if not smtp_configured():
-        return False, "E-Mail-Versand ist nicht konfiguriert."
+        return False, "E-Mail-Versand ist nicht eingerichtet."
 
     cfg = smtp_config()
     msg = EmailMessage()
@@ -138,25 +174,19 @@ def send_initial_password(to_email: str, username: str, password: str,
     msg.set_content(_body(cfg, username, password, role, reason, actor))
 
     try:
-        if cfg["starttls"]:
-            with smtplib.SMTP(cfg["host"], cfg["port"],
-                              timeout=SMTP_TIMEOUT_SECONDS) as smtp:
-                smtp.ehlo()
-                smtp.starttls(context=ssl.create_default_context())
-                smtp.ehlo()
-                smtp.login(cfg["user"], cfg["password"])
-                smtp.send_message(msg)
-        else:
-            with smtplib.SMTP_SSL(cfg["host"], cfg["port"],
-                                  timeout=SMTP_TIMEOUT_SECONDS,
-                                  context=ssl.create_default_context()) as smtp:
-                smtp.login(cfg["user"], cfg["password"])
-                smtp.send_message(msg)
+        smtp = _connect(cfg)
+        try:
+            smtp.send_message(msg)
+        finally:
+            try:
+                smtp.quit()
+            except (smtplib.SMTPException, OSError):
+                pass
     except smtplib.SMTPRecipientsRefused:
         return False, f"Die Adresse {to_email} wurde vom Mailserver abgelehnt."
     except smtplib.SMTPAuthenticationError:
-        return False, ("Anmeldung am Mailserver fehlgeschlagen — bitte "
-                       "ADR_SMTP_USER und ADR_SMTP_PASSWORD prüfen.")
+        return False, ("Anmeldung am Mailserver fehlgeschlagen — bitte die "
+                       "Zugangsdaten unter Einstellungen prüfen.")
     except (smtplib.SMTPException, OSError) as exc:
         # Nur die technische Ursache nennen, nie den Nachrichteninhalt.
         return False, f"Versand fehlgeschlagen: {exc.__class__.__name__}"

@@ -22,10 +22,9 @@
 <div class="alert alert-info">
     <strong>Kein E-Mail-Versand eingerichtet — das ist in Ordnung.</strong>
     Anfangspasswörter werden beim Anlegen einmalig auf dem Bildschirm
-    angezeigt und von Ihnen weitergegeben. Optional kann die Zustellung per
-    E-Mail eingerichtet werden (<code>ADR_SMTP_USER</code> und
-    <code>ADR_SMTP_PASSWORD</code>, siehe Handbuch); dann erhält die Person
-    ihr Startpasswort selbst.
+    angezeigt und von Ihnen weitergegeben. Wenn Sie möchten, dass die Person
+    ihr Startpasswort selbst erhält, richten Sie den Versand unter
+    <a href="{{ url_for('users.settings_page') }}">Einstellungen</a> ein.
 </div>
 {% endif %}
 

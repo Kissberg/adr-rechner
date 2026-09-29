@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h4 class="mb-0"><i class="bi bi-sliders me-1"></i>Einstellungen</h4>
+        <p class="text-muted small mb-0">
+            Betriebseinstellungen dieser Instanz. Sie liegen in der Datenbank
+            und wirken sofort — ein Neustart ist nicht nötig.
+        </p>
+    </div>
+</div>
+
+<div id="pageAlert" class="alert d-none"></div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <strong>E-Mail-Versand von Anfangspasswörtern</strong>
+        <span class="text-muted small">(optional)</span>
+    </div>
+    <div class="card-body">
+        {% if mail_configured %}
+        <div class="alert alert-success">
+            Der Versand ist eingerichtet. Wird ein Konto ohne Startpasswort
+            angelegt, erhält die Person das erzeugte Passwort per E-Mail.
+        </div>
+        {% else %}
+        <div class="alert alert-info">
+            Der Versand ist <strong>nicht</strong> eingerichtet — das ist kein
+            Fehler. Anfangspasswörter werden beim Anlegen einmalig auf dem
+            Bildschirm angezeigt und persönlich übergeben. Wenn Sie die
+            Zustellung per E-Mail wünschen, tragen Sie hier die Zugangsdaten
+            Ihres Postfachs ein.
+        </div>
+        {% endif %}
+
+        <div class="row">
+            <div class="col-md-8 mb-3">
+                <label class="form-label" for="smtp_host">Mailserver</label>
+                <input type="text" class="form-control" id="smtp_host"
+                       value="{{ werte.smtp_host }}"
+                       placeholder="z. B. smtp.ihr-anbieter.de" autocomplete="off">
+            </div>
+            <div class="col-md-4 mb-3">
+                <label class="form-label" for="smtp_port">Port</label>
+                <input type="number" class="form-control" id="smtp_port"
+                       value="{{ werte.smtp_port or 587 }}" min="1" max="65535">
+            </div>
+        </div>
+
+        <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="smtp_starttls"
+                   {% if werte.smtp_starttls != '0' %}checked{% endif %}>
+            <label class="form-check-label" for="smtp_starttls">
+                STARTTLS verwenden <span class="text-muted">(üblich, meist
+                Port 587). Ausschalten für implizites TLS, meist Port 465.</span>
+            </label>
+        </div>
+
+        <div class="row">
+            <div class="col-md-6 mb-3">
+                <label class="form-label" for="smtp_user">Benutzer / Postfach</label>
+                <input type="text" class="form-control" id="smtp_user"
+                       value="{{ werte.smtp_user }}" autocomplete="off"
+                       placeholder="z. B. versand@firma.de">
+            </div>
+            <div class="col-md-6 mb-3">
+                <label class="form-label" for="smtp_password">Passwort</label>
+                <input type="password" class="form-control" id="smtp_password"
+                       autocomplete="new-password"
+                       placeholder="{% if werte.password_set %}hinterlegt — leer lassen zum Beibehalten{% else %}noch nicht hinterlegt{% endif %}">
+                <div class="form-text">
+                    Wird nie angezeigt und nie im Protokoll gespeichert.
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-6 mb-3">
+                <label class="form-label" for="mail_from">Absenderadresse</label>
+                <input type="email" class="form-control" id="mail_from"
+                       value="{{ werte.mail_from }}" autocomplete="off"
+                       placeholder="leer = Benutzer/Postfach oben">
+            </div>
+            <div class="col-md-6 mb-3">
+                <label class="form-label" for="mail_app_url">Adresse der Anwendung</label>
+                <input type="text" class="form-control" id="mail_app_url"
+                       value="{{ werte.mail_app_url }}" autocomplete="off"
+                       placeholder="z. B. http://192.168.178.144:5050">
+                <div class="form-text">Wird als Anmeldelink in die E-Mail aufgenommen.</div>
+            </div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label" for="mail_app_name">Name in Betreff und Signatur</label>
+            <input type="text" class="form-control" id="mail_app_name"
+                   value="{{ werte.mail_app_name }}" autocomplete="off">
+        </div>
+
+        <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-primary" id="mailSave">
+                <i class="bi bi-save me-1"></i>Speichern
+            </button>
+            <button class="btn btn-outline-secondary" id="mailTest">
+                <i class="bi bi-plug me-1"></i>Verbindung testen
+            </button>
+            {% if werte.password_set %}
+            <button class="btn btn-outline-danger" id="mailClearPassword">
+                <i class="bi bi-x-circle me-1"></i>Passwort löschen
+            </button>
+            {% endif %}
+        </div>
+
+        <div class="form-text mt-3">
+            „Verbindung testen" meldet sich am Mailserver an, <strong>ohne</strong>
+            eine Nachricht zu senden.
+        </div>
+    </div>
+</div>
+
+<div class="alert alert-secondary small">
+    <strong>Wo liegen diese Angaben?</strong>
+    In der Datenbank dieser Instanz — nicht in der Container-Konfiguration.
+    Damit bringt eine Auslieferung keine fremden Zugangsdaten mit, und das
+    Postfach lässt sich wechseln, ohne die Anwendung neu aufzusetzen. Das
+    Passwort wird ausschließlich an dieser Stelle gespeichert; es verlässt
+    die Anwendung nicht (weder im Protokoll noch in einer Antwort der
+    Schnittstelle).
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/einstellungen.js') }}"></script>
+{% endblock %}

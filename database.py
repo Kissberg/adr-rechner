@@ -172,6 +172,17 @@ def init_db() -> None:
             email                VARCHAR(200)
         );
 
+        -- Einstellungen des Betriebs, die ein Administrator in der
+        -- Anwendung pflegt (z. B. Zugangsdaten des Mailservers). Bewusst
+        -- nicht in Umgebungsvariablen: sie gehören zum Datenbestand des
+        -- Kunden, nicht zur Auslieferung.
+        CREATE TABLE IF NOT EXISTS settings (
+            key        VARCHAR(80) PRIMARY KEY,
+            value      TEXT,
+            updated_at TIMESTAMP,
+            updated_by VARCHAR(100)
+        );
+
         -- Fehlversuche beim Anmelden (Schutz gegen Passwortraten).
         CREATE TABLE IF NOT EXISTS login_attempts (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,

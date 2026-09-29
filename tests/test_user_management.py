@@ -40,9 +40,6 @@ def client(monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", db_path)
     monkeypatch.setenv("ADR_ADMIN_USER", "admin")
     monkeypatch.setenv("ADR_ADMIN_PASSWORD", ADMIN_PW)
-    # Kein Versand im Test — das erzeugte Passwort kommt aus der Antwort.
-    monkeypatch.delenv("ADR_SMTP_USER", raising=False)
-    monkeypatch.delenv("ADR_SMTP_PASSWORD", raising=False)
 
     database.init_db()
     auth.ensure_default_admin()
