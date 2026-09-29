@@ -166,7 +166,10 @@ def init_db() -> None:
             -- muss bei der nächsten Anmeldung ersetzt werden.
             must_change_password BOOLEAN NOT NULL DEFAULT 0,
             password_changed_at  TIMESTAMP,
-            created_by           VARCHAR(100)
+            created_by           VARCHAR(100),
+            -- Zustelladresse für Anfangspasswort und Zurücksetzungen.
+            -- Ohne Adresse bleibt nur die einmalige Anzeige im Bildschirm.
+            email                VARCHAR(200)
         );
 
         -- Fehlversuche beim Anmelden (Schutz gegen Passwortraten).
@@ -282,6 +285,8 @@ def init_db() -> None:
         "must_change_password": "BOOLEAN NOT NULL DEFAULT 0",
         "password_changed_at": "TIMESTAMP",
         "created_by": "VARCHAR(100)",
+        # v4.1: Zustelladresse des Anfangspassworts.
+        "email": "VARCHAR(200)",
     }
     for col, ddl in V4_USER_COLUMNS.items():
         try:

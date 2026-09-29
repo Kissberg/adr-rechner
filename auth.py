@@ -11,27 +11,27 @@ Rollen
   user   — Berechnung, Beförderungspapiere, Kunden- und Adressverwaltung
 
 Der erste Administrator wird beim Start angelegt, sofern kein Benutzer
-existiert. Die Zugangsdaten kommen aus den Umgebungsvariablen
-ADR_ADMIN_USER / ADR_ADMIN_PASSWORD. Ist kein Passwort gesetzt, wird ein
-zufälliges erzeugt und in eine Datei geschrieben, die nur für den Besitzer
-lesbar ist (0600) — NICHT ins Log.
+existiert: Benutzername `admin`, Passwort `admin` (oder ADR_ADMIN_USER /
+ADR_ADMIN_PASSWORD, wenn gesetzt). Dieses Standardpasswort ist bewusst fest
+und öffentlich dokumentiert — eine Erstinstallation braucht damit keine
+vorherige Zugangsdatenverteilung.
 
 ────────────────────────────────────────────────────────────────────────
-WICHTIG — warum ein erzeugtes Passwort nicht ins Log darf
+WICHTIG — warum `admin`/`admin` vertretbar ist und wo die Grenze liegt
 ────────────────────────────────────────────────────────────────────────
-Logs sind grundsätzlich breiter lesbar und länger verfügbar als die
-Anwendung selbst: `docker logs` zeigt sie jedem mit Docker-Zugang, in
-Containern landen sie in json-Dateien, in Betrieben in ELK/Loki/Grafana —
-dort sind sie oft wochenlang durchsuchbar und für deutlich mehr Personen
-lesbar als die Datenbank. Ein einmalig erzeugtes Administratorpasswort im
-Log ist damit faktisch ein dauerhaft gültiger Admin-Zugang für alle, die
-Logs lesen dürfen.
+Ein festes Standardpasswort ist nur deshalb kein Sicherheitsloch, weil es
+nur bis zur ersten Anmeldung gilt: das Konto wird mit
+`must_change_password = 1` angelegt, und die Anwendung erzwingt den Wechsel
+beim ersten Anmelden (siehe app.py, `_require_login`) — vorher ist kein
+anderer Endpunkt erreichbar, auch keine API. Der Zustand „Passwortwechsel
+offen" ist in der Benutzerverwaltung sichtbar.
 
-Deshalb wird das erzeugte Passwort in eine Datei mit Modus 0600 im
-Datenverzeichnis geschrieben und im Log nur der Pfad genannt. Für den
-Produktivbetrieb steht zusätzlich ADR_REQUIRE_ADMIN_PASSWORD=1 bereit:
-Dann verweigert die Anwendung den Start, wenn kein Passwort gesetzt ist,
-statt eines zu erzeugen.
+Voraussetzung dafür ist, dass der Standard NICHT dauerhaft gültig bleibt:
+Die Anwendung darf die Erstinstallation nie ohne erzwungenen Wechsel
+ausliefern. Auf einem Netz, das nicht ausschließlich aus vertrauenswürdigen
+Rechnern besteht, gehört die Instanz zusätzlich hinter TLS (siehe README,
+Abschnitt Sicherheit) — sonst liest der erste Zugriff im Netz das
+Anfangspasswort mit.
 """
 
 from __future__ import annotations
@@ -40,7 +40,6 @@ import os
 import re
 import secrets
 import sqlite3
-import subprocess
 from datetime import datetime
 from functools import wraps
 from typing import Optional
@@ -54,6 +53,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 # und eine beim Import kopierte Konstante würde das nicht mitbekommen.
 import database
 import audit
+import mailer
 from database import get_db
 
 ROLE_ADMIN = "admin"
@@ -66,9 +66,14 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 # die JSON-Schnittstelle gehört unter /api/users, nicht unter /auth/api/users.
 users_bp = Blueprint("users", __name__)
 
-# Datei für ein erzeugtes Anfangspasswort. Bewusst im Datenverzeichnis,
-# damit sie im Docker-Volume liegt und nicht im Image landet.
-ADMIN_PASSWORD_FILENAME = ".admin_password"
+# ─────────────────────────────────────────────────────────────────────
+# Erstzugang
+# ─────────────────────────────────────────────────────────────────────
+# Standardwerte für den ersten Administrator. Sie sind bewusst fest und
+# stehen im Handbuch; das Konto entsteht mit erzwungenem Passwortwechsel
+# und ist bis dahin auf die Passwortseite beschränkt.
+BOOTSTRAP_ADMIN_USER = "admin"
+BOOTSTRAP_ADMIN_PASSWORD = "admin"
 
 # ─────────────────────────────────────────────────────────────────────
 # Passwortrichtlinie
@@ -187,115 +192,29 @@ def auth_enabled() -> bool:
     return os.environ.get("AUTH_ENABLED", "1").strip().lower() not in ("0", "false", "no")
 
 
-def require_configured_password() -> bool:
-    """Strenger Start: ohne gesetztes ADR_ADMIN_PASSWORD nicht hochfahren.
-
-    Für den Produktivbetrieb empfohlen. Wird hierauf verzichtet, erzeugt die
-    Anwendung ein Zufallspasswort und legt es in einer Datei ab.
-    """
-    return os.environ.get("ADR_REQUIRE_ADMIN_PASSWORD", "0").strip().lower() \
-        in ("1", "true", "yes")
-
-
-def admin_password_path() -> str:
-    """Pfad der Datei mit dem erzeugten Anfangspasswort."""
-    configured = os.environ.get("ADR_ADMIN_PASSWORD_FILE", "").strip()
-    return configured or os.path.join(database.DB_DIR, ADMIN_PASSWORD_FILENAME)
-
-
-def _current_user_sid() -> Optional[str]:
-    """SID des aktuellen Windows-Kontos, für icacls. None unter Unix."""
-    try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-             "[System.Security.Principal.WindowsIdentity]::GetCurrent()"
-             ".User.Value"],
-            capture_output=True, text=True, timeout=20,
-        )
-        sid = out.stdout.strip()
-        return sid or None
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def restrict_to_owner(path: str) -> bool:
-    """Beschränkt die Datei auf den Besitzer. Wirkt unter Unix und Windows.
-
-    Unter Unix genügt chmod 0600. Unter Windows ignoriert os.open() den
-    Modus — ohne diesen Schritt wäre die Datei über die vom übergeordneten
-    Ordner geerbten Rechte für alle Konten des Rechners lesbar, und die
-    Ausgabe „nur für den Besitzer lesbar" wäre eine falsche Zusicherung.
-    """
-    if os.name == "nt":
-        sid = _current_user_sid()
-        if not sid:
-            return False
-        try:
-            # /inheritance:r entfernt geerbte Rechte; danach wird nur dem
-            # eigenen Konto Lese- und Schreibrecht eingeräumt.
-            subprocess.run(["icacls", path, "/inheritance:r", "/Q"],
-                           capture_output=True, timeout=20, check=False)
-            grant = subprocess.run(
-                ["icacls", path, "/grant:r", f"*{sid}:(R,W)", "/Q"],
-                capture_output=True, timeout=20, check=False)
-            return grant.returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            return False
-
-    try:
-        os.chmod(path, 0o600)
-        return True
-    except OSError:
-        return False
-
-
-def write_admin_password(username: str, password: str) -> Optional[tuple]:
-    """Schreibt das erzeugte Passwort in eine eigentümer-geschützte Datei.
-
-    Gibt (Pfad, rechte_gesetzt) zurück oder None, wenn die Datei nicht
-    geschrieben werden konnte. Das Passwort wird unter keinen Umständen ins
-    Log geschrieben — auch nicht, wenn das Schreiben fehlschlägt.
-    """
-    path = admin_password_path()
-    try:
-        directory = os.path.dirname(path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        # 0600 direkt beim Anlegen: so existiert die Datei nie kurzzeitig
-        # mit weitergehenden Rechten.
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(f"Benutzername : {username}\n")
-            fh.write(f"Passwort     : {password}\n")
-            fh.write("\nDiese Datei enthält ein erzeugtes Anfangspasswort.\n")
-            fh.write("Bitte nach der ersten Anmeldung das Passwort ändern\n")
-            fh.write("und diese Datei löschen.\n")
-        return path, restrict_to_owner(path)
-    except OSError:
-        return None
-
-
-def delete_admin_password_file() -> bool:
-    """Entfernt die Passwortdatei, nachdem das Passwort geändert wurde."""
-    path = admin_password_path()
-    try:
-        if os.path.exists(path):
-            os.remove(path)
-            return True
-    except OSError:
-        pass
-    return False
-
-
 # ─────────────────────────────────────────────────────────────────────
 # Benutzerverwaltung
 # ─────────────────────────────────────────────────────────────────────
+#
+# Hinweis zur Ablösung: bis v4.0 erzeugte die Anwendung bei fehlendem
+# ADR_ADMIN_PASSWORD ein Zufallspasswort und legte es in einer Datei
+# `.admin_password` (0600) im Datenverzeichnis ab. Seit v4.1 gibt es
+# stattdessen einen festen, dokumentierten Erstzugang (admin/admin) mit
+# erzwungenem Wechsel — damit entfällt die Passwortdatei samt
+# Rechte-Absicherung (icacls/chmod) ersatzlos. Wer den Erstzugang
+# vorbelegen will, setzt ADR_ADMIN_PASSWORD.
 
 def ensure_default_admin() -> None:
     """
     Legt den ersten Administrator an, sofern noch kein Benutzer existiert.
-    Passwort aus ADR_ADMIN_PASSWORD, sonst zufällig — dann wird es in eine
-    Datei mit Modus 0600 geschrieben, NICHT ausgegeben (siehe Modulkopf).
+
+    Benutzername/Passwort: ADR_ADMIN_USER / ADR_ADMIN_PASSWORD, sonst
+    „admin" / „admin" (BOOTSTRAP_ADMIN_*). Das Konto entsteht in jedem Fall
+    mit must_change_password = 1 — der Wechsel wird bei der ersten
+    Anmeldung erzwungen (siehe app.py, `_require_login`), bis dahin ist
+    kein anderer Endpunkt erreichbar. Die Passwortrichtlinie greift hier
+    bewusst nicht: „admin" wäre nach ihr zu kurz, und genau dafür ist der
+    erzwungene Wechsel der Ausgleich.
 
     Wichtig bei mehreren Gunicorn-Workern: Alle Worker führen diesen Code
     beim Import aus. Ein normales "erst prüfen, dann einfügen" kann daher
@@ -305,81 +224,29 @@ def ensure_default_admin() -> None:
     an rowcount == 0, dass ein anderer Worker den Benutzer angelegt hat.
 
     Ein bereits vorhandener Benutzer wird niemals überschrieben.
-
-    Raises:
-        RuntimeError: Wenn ein Passwort erzeugt werden müsste, aber weder
-            ADR_ADMIN_PASSWORD gesetzt ist (bei ADR_REQUIRE_ADMIN_PASSWORD=1)
-            noch die Passwortdatei geschrieben werden kann. Ein Administrator
-            mit unbekanntem Passwort wäre eine dauerhafte Sperre — deshalb
-            wird hier abgebrochen statt weiterzulaufen.
     """
-    username = os.environ.get("ADR_ADMIN_USER", "admin").strip() or "admin"
-    password = os.environ.get("ADR_ADMIN_PASSWORD", "").strip()
-    generated = False
-
+    username = (os.environ.get("ADR_ADMIN_USER") or "").strip() \
+        or BOOTSTRAP_ADMIN_USER
+    password = (os.environ.get("ADR_ADMIN_PASSWORD") or "").strip()
+    from_environment = bool(password)
     if not password:
-        if require_configured_password():
-            raise RuntimeError(
-                "ADR_REQUIRE_ADMIN_PASSWORD ist gesetzt, aber "
-                "ADR_ADMIN_PASSWORD fehlt. Start verweigert — bitte "
-                "ADR_ADMIN_PASSWORD setzen oder ADR_REQUIRE_ADMIN_PASSWORD "
-                "zurücknehmen, damit ein Zufallspasswort erzeugt wird."
-            )
-        password = secrets.token_urlsafe(16)
-        generated = True
-
-    # Ein vorgegebenes Passwort wird nur geprüft, wenn wirklich ein Konto
-    # entsteht. Bei bestehender Datenbank legt die Funktion nichts an — eine
-    # Prüfung könnte dort ein Upgrade blockieren, obwohl der Wert gar nicht
-    # verwendet wird.
-    if not generated:
-        conn = get_db()
-        try:
-            vorhanden = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        finally:
-            conn.close()
-        if not vorhanden:
-            problem = validate_password(password, username)
-            if problem:
-                raise RuntimeError(
-                    "ADR_ADMIN_PASSWORD erfüllt die Passwortrichtlinie nicht "
-                    f"({problem}) Start verweigert. Bitte ein längeres, "
-                    "einmaliges Passwort setzen — oder ADR_ADMIN_PASSWORD "
-                    "weglassen, dann wird eines erzeugt."
-                )
-
-    # Passwort zuerst sichern: kann die Datei nicht geschrieben werden,
-    # darf der Benutzer nicht angelegt werden — sonst entstünde ein Konto,
-    # dessen Passwort niemand kennt.
-    password_file = None
-    restricted = False
-    if generated:
-        written = write_admin_password(username, password)
-        if written is not None:
-            password_file, restricted = written
-        if password_file is None:
-            raise RuntimeError(
-                "Ein Administratorpasswort müsste erzeugt werden, konnte aber "
-                "nicht in die Datei " + admin_password_path() + " geschrieben "
-                "werden. Start verweigert. Bitte ADR_ADMIN_PASSWORD setzen "
-                "oder Schreibrechte im Datenverzeichnis prüfen."
-            )
+        password = BOOTSTRAP_ADMIN_PASSWORD
 
     conn = get_db()
     try:
-        # Ein erzeugtes Passwort liegt bis zur ersten Änderung in einer Datei
-        # auf der Platte. Deshalb muss es beim ersten Anmelden ersetzt
-        # werden — danach ist die Datei wertlos und wird gelöscht.
-        # Ein vom Betreiber gesetztes Passwort kennt nur er; dort ist keine
-        # erzwungene Änderung nötig.
+        # Nur eine leere Benutzertabelle bekommt den Erstzugang. Ein
+        # „admin”, der nach einer Umbenennung oder Löschung bei jedem Start
+        # wieder auftaucht, wäre ein dauerhaftes Einfallstor — für diesen
+        # Fall gibt es `manage.py bootstrap-admin`.
+        if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
+            return
         cur = conn.execute(
             "INSERT OR IGNORE INTO users (username, password_hash, role, active, "
             "must_change_password, created_at, created_by) "
-            "VALUES (?, ?, ?, 1, ?, ?, ?)",
+            "VALUES (?, ?, ?, 1, 1, ?, ?)",
             (username, generate_password_hash(password), ROLE_ADMIN,
-             1 if generated else 0,
              datetime.now().isoformat(timespec="seconds"),
-             "Umgebungsvariable" if not generated else "System"),
+             "Umgebungsvariable" if from_environment else "Standard"),
         )
         conn.commit()
         created = (cur.rowcount or 0) > 0
@@ -387,32 +254,21 @@ def ensure_default_admin() -> None:
         conn.close()
 
     if not created:
-        # Bereits vorhanden (vorheriger Start oder paralleler Worker).
-        # Das Passwort wird bewusst NICHT zurückgesetzt, damit niemand durch
-        # bloßes Setzen einer Umgebungsvariable Zugriff auf fremde Konten
-        # übernehmen kann.
+        # Paralleler Worker war schneller.
         return
 
-    if generated:
-        # Nur der Pfad — niemals das Passwort selbst.
-        print("=" * 72)
-        print("  ERSTER ADMINISTRATOR WURDE ANGELEGT")
-        print(f"  Benutzername : {username}")
-        print("  Passwort     : NICHT im Log — siehe Datei")
-        if restricted:
-            print(f"  Datei        : {password_file}  (nur für den Besitzer lesbar)")
-        else:
-            # Keine falsche Zusicherung: wenn die Rechte nicht gesetzt werden
-            # konnten, muss das hier stehen.
-            print(f"  Datei        : {password_file}")
-            print("  ACHTUNG      : Die Rechte konnten NICHT auf den Besitzer "
-                  "beschränkt werden.")
-            print("                Datei nach der ersten Anmeldung unbedingt "
-                  "löschen.")
-        print("  Bitte nach der ersten Anmeldung ändern und die Datei löschen.")
-        print("=" * 72)
+    print("=" * 72)
+    print("  ERSTER ADMINISTRATOR WURDE ANGELEGT")
+    print(f"  Benutzername : {username}")
+    if from_environment:
+        # Wert aus der Umgebung — ein Geheimnis, das nicht ins Log gehört.
+        print("  Passwort     : aus ADR_ADMIN_PASSWORD gesetzt (nicht im Log)")
     else:
-        print(f"[auth] Administrator '{username}' angelegt.")
+        # Dokumentierter Erstzugang; gilt nur bis zur ersten Anmeldung.
+        print(f"  Passwort     : {password}")
+    print("  ACHTUNG      : Der Passwortwechsel wird bei der ersten Anmeldung "
+          "erzwungen.")
+    print("=" * 72)
 
 
 def verify_credentials(username: str, password: str) -> Optional[sqlite3.Row]:
@@ -607,10 +463,6 @@ def change_password():
 
     session["must_change_password"] = False
 
-    # Eine Datei mit dem erzeugten Anfangspasswort ist damit wertlos
-    # geworden — sie wird entfernt, damit sie nicht liegen bleibt.
-    delete_admin_password_file()
-
     return jsonify({"ok": True})
 
 
@@ -619,12 +471,32 @@ def change_password():
 # ─────────────────────────────────────────────────────────────────────
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{3,64}$")
 
+# Bewusst grob: die endgültige Gültigkeit einer Adresse kann nur der
+# Mailserver feststellen. Geprüft wird, was ohne DNS-Zugriff entscheidbar
+# ist — genau ein @, keine Leerzeichen, ein Punkt in der Domain.
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+
+
+def _validate_email(email: str) -> Optional[str]:
+    """Gibt eine Fehlermeldung zurück oder None."""
+    if not email:
+        return ("Bitte eine E-Mail-Adresse angeben — dorthin wird das "
+                "Anfangspasswort gesendet.")
+    if len(email) > 200:
+        return "Die E-Mail-Adresse ist zu lang (höchstens 200 Zeichen)."
+    if not EMAIL_PATTERN.match(email):
+        return f"„{email}” ist keine gültige E-Mail-Adresse."
+    return None
+
 
 def _user_public_dict(row) -> dict:
     """Benutzerdatensatz ohne Passwort-Hash für die Ausgabe."""
     return {
         "id": row["id"],
         "username": row["username"],
+        # row["email"] fehlt in alten Datenbanken bis zum ersten Start nach
+        # dem Upgrade — sqlite3.Row wirft dann IndexError statt None.
+        "email": (row["email"] if "email" in row.keys() else None),
         "role": row["role"],
         "active": bool(row["active"]),
         "must_change_password": bool(row["must_change_password"]),
@@ -654,7 +526,8 @@ def _active_admin_count(exclude_id: Optional[int] = None) -> int:
 @role_required(ROLE_ADMIN)
 def users_page():
     """Benutzerverwaltung."""
-    return render_template("benutzer.html", title="Benutzerverwaltung")
+    return render_template("benutzer.html", title="Benutzerverwaltung",
+                           mail_configured=mailer.smtp_configured())
 
 
 @users_bp.route("/api/users", methods=["GET"])
@@ -684,15 +557,19 @@ def api_users_list():
 def api_users_create():
     """Legt ein Benutzerkonto an.
 
-    Ohne Passwort im Request wird eines erzeugt und **einmalig in der
-    Antwort** zurückgegeben — nicht im Log. Der Administrator übergibt es
-    der Person, die es beim ersten Anmelden ohnehin ersetzen muss.
+    Erwartet Benutzername, E-Mail-Adresse und Rolle. Ohne Passwort im
+    Request wird eines erzeugt und **per E-Mail an die betroffene Person**
+    gesendet — der Administrator erfährt es nicht. Nur wenn kein
+    E-Mail-Versand eingerichtet ist, kommt das erzeugte Passwort ersatzweise
+    einmalig in der Antwort zurück (nicht im Log), damit die Einrichtung
+    nicht an der fehlenden Konfiguration scheitert.
     """
     from flask import jsonify
     me = current_user()
     data = request.get_json(force=True, silent=True) or {}
 
     username = (data.get("username") or "").strip()
+    email = (data.get("email") or "").strip()
     role = (data.get("role") or ROLE_USER).strip()
     password = data.get("password") or ""
     generated = False
@@ -703,6 +580,9 @@ def api_users_create():
                                  "Bindestrich und Unterstrich enthalten."}), 400
     if role not in VALID_ROLES:
         return jsonify({"error": f"Unbekannte Rolle: {role}"}), 400
+    problem = _validate_email(email)
+    if problem:
+        return jsonify({"error": problem}), 400
 
     if not password:
         password = secrets.token_urlsafe(12)
@@ -725,24 +605,47 @@ def api_users_create():
                                      f"stattdessen wieder aktivieren."}), 409
         cur = conn.execute(
             "INSERT INTO users (username, password_hash, role, active, "
-            "must_change_password, created_at, created_by) "
-            "VALUES (?, ?, ?, 1, 1, ?, ?)",
+            "must_change_password, created_at, created_by, email) "
+            "VALUES (?, ?, ?, 1, 1, ?, ?, ?)",
             (username, generate_password_hash(password), role,
-             datetime.now().isoformat(timespec="seconds"), me["username"]),
+             datetime.now().isoformat(timespec="seconds"), me["username"],
+             email),
         )
         new_id = cur.lastrowid
         conn.commit()
     finally:
         conn.close()
 
+    # Versand erst nach dem Anlegen: ein Zustellfehler darf das Konto nicht
+    # wieder verschwinden lassen.
+    sent, reason = False, None
+    if generated:
+        sent, reason = mailer.send_initial_password(
+            email, username, password, role, reason="neu",
+            actor=me["username"])
+
+    if sent:
+        zustellung = f"Das Anfangspasswort wurde an {email} gesendet."
+    elif generated:
+        zustellung = (f"Kein E-Mail-Versand ({reason}) — das Anfangspasswort "
+                      f"wird jetzt einmalig angezeigt.")
+    else:
+        zustellung = ("Das vorgegebene Passwort bitte selbst weitergeben; es "
+                      "muss bei der ersten Anmeldung geändert werden.")
+
     audit.log(audit.CREATE, "user", new_id,
-              f"Benutzer „{username}” mit Rolle {role} angelegt")
+              f"Benutzer „{username}” ({email}) mit Rolle {role} angelegt; "
+              + ("Anfangspasswort per E-Mail zugestellt" if sent
+                 else "Anfangspasswort einmalig angezeigt"))
     return jsonify({
         "id": new_id,
         "username": username,
+        "email": email,
         "role": role,
-        "generated_password": password if generated else None,
-        "message": f"Benutzer „{username}” wurde angelegt.",
+        "email_sent": sent,
+        "email_error": reason,
+        "generated_password": password if (generated and not sent) else None,
+        "message": f"Benutzer „{username}” wurde angelegt. {zustellung}",
     }), 201
 
 
@@ -797,35 +700,59 @@ def api_users_update(user_id: int):
 @login_required
 @role_required(ROLE_ADMIN)
 def api_users_delete(user_id: int):
-    """Deaktiviert ein Konto.
+    """Löscht ein Konto endgültig (Zeile wird entfernt).
 
-    Bewusst keine Zeilenlöschung: das Audit-Log verweist über `username`
-    auf das Konto, und ein gelöschter Benutzer würde diese Zuordnung
-    zerstören. Deaktivieren sperrt den Zugang sofort und bleibt
-    nachvollziehbar.
+    Zwei getrennte Vorgänge, bewusst nicht vermischt:
+      * Deaktivieren (PUT mit active=false) sperrt den Zugang sofort und
+        lässt das Konto samt Zuordnung im Audit-Log bestehen — der Regelfall
+        bei Austritt, Krankheit, Umzug.
+      * Löschen (diese Route) entfernt den Datensatz. Das ist der Weg für
+        Fehlanlagen, Testkonten und für das Recht auf Löschung
+        (Art. 17 DSGVO). Die Zuordnung im Audit-Log bleibt über den
+        Benutzernamen als Text erhalten; ein Eintrag hält fest, wer wann
+        welches Konto gelöscht hat.
+
+    Ausgesperrt bleibt nur, was das System handlungsunfähig machen würde:
+    das eigene Konto und der letzte aktive Administrator.
     """
     from flask import jsonify
     me = current_user()
     if user_id == me["id"]:
-        return jsonify({"error": "Das eigene Konto kann nicht deaktiviert "
-                                 "werden."}), 400
+        return jsonify({"error": "Das eigene Konto kann nicht gelöscht "
+                                 "werden. Bitte einen anderen Administrator "
+                                 "darum bitten."}), 400
 
     conn = get_db()
     try:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if row is None:
             return jsonify({"error": "Benutzer nicht gefunden"}), 404
-        if row["role"] == ROLE_ADMIN and _active_admin_count(exclude_id=user_id) == 0:
+        if row["role"] == ROLE_ADMIN and row["active"] \
+                and _active_admin_count(exclude_id=user_id) == 0:
             return jsonify({"error": "Der letzte aktive Administrator kann "
-                                     "nicht deaktiviert werden."}), 400
-        conn.execute("UPDATE users SET active = 0 WHERE id = ?", (user_id,))
+                                     "nicht gelöscht werden."}), 400
+
+        username = row["username"]
+        email = row["email"] if "email" in row.keys() else None
+        role = row["role"]
+        was_active = bool(row["active"])
+
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        # Fehlversuche gehören zum Konto: ohne diese Zeile würde ein neues
+        # Konto gleichen Namens mit fremden Fehlversuchen starten.
+        conn.execute("DELETE FROM login_attempts WHERE username = ?",
+                     (username.strip().lower(),))
         conn.commit()
     finally:
         conn.close()
 
     audit.log(audit.DELETE, "user", user_id,
-              f"Benutzer „{row['username']}” deaktiviert")
-    return jsonify({"ok": True, "id": user_id})
+              f"Benutzer „{username}” (Rolle {role}"
+              + (f", {email}" if email else "")
+              + ") endgültig gelöscht"
+              + ("" if was_active else " — Konto war bereits deaktiviert"))
+    return jsonify({"ok": True, "id": user_id, "username": username,
+                    "deleted": True})
 
 
 @users_bp.route("/api/users/<int:user_id>/password", methods=["POST"])
@@ -835,9 +762,12 @@ def api_users_reset_password(user_id: int):
     """Setzt das Passwort eines Kontos zurück.
 
     Das Konto muss das Passwort bei der nächsten Anmeldung ändern — sonst
-    kennt der Administrator dauerhaft ein fremdes Passwort.
+    kennt der Administrator dauerhaft ein fremdes Passwort. Bei erzeugtem
+    Passwort geht es per E-Mail an die hinterlegte Adresse; nur wenn kein
+    Versand eingerichtet ist, kommt es einmalig in der Antwort zurück.
     """
     from flask import jsonify
+    me = current_user()
     data = request.get_json(force=True, silent=True) or {}
     password = data.get("password") or ""
 
@@ -847,6 +777,7 @@ def api_users_reset_password(user_id: int):
         if row is None:
             return jsonify({"error": "Benutzer nicht gefunden"}), 404
 
+        email = row["email"] if "email" in row.keys() else None
         generated = False
         if not password:
             password = secrets.token_urlsafe(12)
@@ -863,14 +794,26 @@ def api_users_reset_password(user_id: int):
              datetime.now().isoformat(timespec="seconds"), user_id),
         )
         conn.commit()
+        username, role = row["username"], row["role"]
     finally:
         conn.close()
 
+    sent, reason = False, None
+    if generated and email:
+        sent, reason = mailer.send_initial_password(
+            email, username, password, role, reason="zuruecksetzung",
+            actor=me["username"])
+
     audit.log(audit.UPDATE, "user", user_id,
-              f"Passwort von „{row['username']}” zurückgesetzt "
-              f"(Änderung bei nächster Anmeldung erzwungen)")
+              f"Passwort von „{username}” zurückgesetzt "
+              f"(Änderung bei nächster Anmeldung erzwungen; "
+              + ("per E-Mail zugestellt)" if sent
+                 else "einmalig angezeigt)"))
     return jsonify({
         "ok": True,
-        "username": row["username"],
-        "generated_password": password if generated else None,
+        "username": username,
+        "email": email,
+        "email_sent": sent,
+        "email_error": reason,
+        "generated_password": password if (generated and not sent) else None,
     })

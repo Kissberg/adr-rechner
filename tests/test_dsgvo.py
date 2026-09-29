@@ -26,7 +26,8 @@ import database
 import auth
 
 
-ADMIN_PW = "Streng-Vertraulich-2026"
+ADMIN_PW = "Streng-Vertraulich-2026a"
+ADMIN_PW_NEU = "Streng-Vertraulich-2026b"
 
 
 @pytest.fixture()
@@ -37,7 +38,6 @@ def client(monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", db_path)
     monkeypatch.setenv("ADR_ADMIN_USER", "admin")
     monkeypatch.setenv("ADR_ADMIN_PASSWORD", ADMIN_PW)
-    monkeypatch.delenv("ADR_REQUIRE_ADMIN_PASSWORD", raising=False)
 
     export_dir = os.path.join(tmp, "exports")
     os.makedirs(export_dir, exist_ok=True)
@@ -50,6 +50,10 @@ def client(monkeypatch):
     app_module.app.config.update(TESTING=True, SECRET_KEY="test-key")
     c = app_module.app.test_client()
     c.post("/auth/login", data={"username": "admin", "password": ADMIN_PW})
+    # Seit v4.1 ist der Passwortwechsel bei der ersten Anmeldung erzwungen.
+    c.post("/auth/password", json={"old_password": ADMIN_PW,
+                                   "new_password": ADMIN_PW_NEU,
+                                   "confirm_password": ADMIN_PW_NEU})
     return c
 
 
@@ -259,6 +263,7 @@ def test_auskunft_ist_administratoren_vorbehalten(client):
     # Passwort darf den Benutzernamen nicht enthalten.
     start_pw = "Nordlicht-Buero-2026"
     client.post("/api/users", json={"username": "sachbearbeiter",
+                                    "email": "sachbearbeiter@musterbetrieb.de",
                                     "role": "user", "password": start_pw})
     client.get("/auth/logout")
     client.post("/auth/login", data={"username": "sachbearbeiter",

@@ -1,9 +1,13 @@
 /*
  * benutzer.js — Benutzerverwaltung
  *
- * Legt Konten an, setzt Passwörter zurück und deaktiviert Konten.
- * Ein von einem Administrator gesetztes oder erzeugtes Passwort wird
- * genau einmal in der Antwort angezeigt und niemals geloggt.
+ * Legt Konten an (Benutzername, E-Mail-Adresse, Rolle), sendet das
+ * Anfangspasswort per E-Mail, setzt Passwörter zurück, deaktiviert Konten
+ * und löscht sie endgültig.
+ *
+ * Ein erzeugtes Passwort steht nie im Log. Ist der E-Mail-Versand nicht
+ * eingerichtet, wird es genau einmal in der Antwort angezeigt — damit ein
+ * Konto auch ohne Postfach eingerichtet werden kann.
  */
 
 const MIN_PW = (window.MIN_PASSWORD_LENGTH || 12);
@@ -65,7 +69,7 @@ function render(users) {
     const tbody = document.getElementById('userRows');
     if (!users.length) {
         tbody.innerHTML =
-            '<tr><td colspan="7" class="text-center text-muted py-4">' +
+            '<tr><td colspan="8" class="text-center text-muted py-4">' +
             'Keine Benutzer vorhanden.</td></tr>';
         return;
     }
@@ -84,7 +88,7 @@ function render(users) {
             actions.push(
                 '<button class="btn btn-sm btn-outline-secondary me-1" ' +
                 'data-act="deactivate" data-id="' + u.id + '" ' +
-                'data-name="' + esc(u.username) + '" title="Deaktivieren"' +
+                'data-name="' + esc(u.username) + '" title="Deaktivieren (Konto bleibt erhalten)"' +
                 (u.is_self ? ' disabled' : '') + '>' +
                 '<i class="bi bi-person-dash"></i></button>'
             );
@@ -92,14 +96,14 @@ function render(users) {
             actions.push(
                 '<button class="btn btn-sm btn-outline-success me-1" ' +
                 'data-act="activate" data-id="' + u.id + '" ' +
-                'title="Wieder aktivieren">' +
+                'data-name="' + esc(u.username) + '" title="Wieder aktivieren">' +
                 '<i class="bi bi-person-check"></i></button>'
             );
         }
 
         const nextRole = u.role === 'admin' ? 'user' : 'admin';
         actions.push(
-            '<button class="btn btn-sm btn-outline-primary" ' +
+            '<button class="btn btn-sm btn-outline-primary me-1" ' +
             'data-act="role" data-id="' + u.id + '" data-role="' + nextRole + '" ' +
             'data-name="' + esc(u.username) + '" ' +
             'title="Rolle ändern zu ' + (nextRole === 'admin' ? 'Administrator' : 'Benutzer') + '"' +
@@ -107,10 +111,20 @@ function render(users) {
             '<i class="bi bi-arrow-left-right"></i></button>'
         );
 
+        actions.push(
+            '<button class="btn btn-sm btn-outline-danger" ' +
+            'data-act="delete" data-id="' + u.id + '" data-name="' + esc(u.username) + '" ' +
+            'title="Endgültig löschen"' +
+            (u.is_self ? ' disabled' : '') + '>' +
+            '<i class="bi bi-trash"></i></button>'
+        );
+
         return '<tr>' +
             '<td>' + esc(u.username) +
                 (u.is_self ? ' <span class="badge bg-light text-dark">Sie</span>' : '') +
             '</td>' +
+            '<td class="small">' + (u.email ? esc(u.email)
+                                    : '<span class="text-muted">—</span>') + '</td>' +
             '<td>' + roleBadge(u.role) + '</td>' +
             '<td>' + statusBadge(u) + '</td>' +
             '<td>' + passwordCell(u) + '</td>' +
@@ -133,12 +147,37 @@ async function loadUsers() {
     return result.data.users || [];
 }
 
+/* Rückmeldung nach Anlegen/Zurücksetzen: entweder wurde gemailt oder das
+ * Passwort wird einmalig angezeigt. */
+function reportPasswordHandling(data, wasCreated, fallbackName) {
+    const name = data.username || fallbackName || '';
+    if (data.generated_password) {
+        showPasswordOnce(name, data.generated_password);
+        return;
+    }
+    const basis = wasCreated
+        ? 'Benutzer „' + name + '“ wurde angelegt. '
+        : 'Passwort für „' + name + '“ wurde gesetzt. ';
+    if (data.email_sent) {
+        showAlert(document.getElementById('pageAlert'), 'success',
+                  basis + 'Das Anfangspasswort wurde an ' + (data.email || '')
+                  + ' gesendet und muss bei der ersten Anmeldung geändert werden.');
+    } else if (data.email_error) {
+        showAlert(document.getElementById('pageAlert'), 'warning',
+                  basis + 'E-Mail-Versand nicht möglich: ' + data.email_error);
+    } else {
+        showAlert(document.getElementById('pageAlert'), 'success',
+                  basis + 'Änderung bei der ersten Anmeldung erzwungen.');
+    }
+}
+
 document.getElementById('neuSave')?.addEventListener('click', async function () {
     const box = document.getElementById('neuAlert');
     box.classList.add('d-none');
 
     const payload = {
         username: document.getElementById('neuName').value.trim(),
+        email: document.getElementById('neuEmail').value.trim(),
         role: document.getElementById('neuRole').value,
         password: document.getElementById('neuPw').value
     };
@@ -157,15 +196,10 @@ document.getElementById('neuSave')?.addEventListener('click', async function () 
 
     bootstrap.Modal.getInstance(document.getElementById('neuModal')).hide();
     document.getElementById('neuName').value = '';
+    document.getElementById('neuEmail').value = '';
     document.getElementById('neuPw').value = '';
     await loadUsers();
-    if (result.data.generated_password) {
-        showPasswordOnce(result.data.username, result.data.generated_password);
-    } else {
-        showAlert(document.getElementById('pageAlert'), 'success',
-                  'Benutzer „' + result.data.username + '“ wurde angelegt und ' +
-                  'muss das Passwort bei der ersten Anmeldung ändern.');
-    }
+    reportPasswordHandling(result.data, true, payload.username);
 });
 
 let pwTarget = null;
@@ -190,13 +224,49 @@ document.getElementById('pwReset')?.addEventListener('click', async function () 
     bootstrap.Modal.getInstance(document.getElementById('pwModal')).hide();
     document.getElementById('pwValue').value = '';
     await loadUsers();
-    if (result.data.generated_password) {
-        showPasswordOnce(result.data.username, result.data.generated_password);
-    } else {
-        showAlert(document.getElementById('pageAlert'), 'success',
-                  'Passwort für „' + result.data.username + '“ gesetzt — ' +
-                  'Änderung bei der nächsten Anmeldung erzwungen.');
+    reportPasswordHandling(result.data, false, pwTarget.name);
+});
+
+/* Endgültiges Löschen: die Bestätigung verlangt den Benutzernamen, weil der
+ * Vorgang nicht rückgängig zu machen ist und direkt neben „Deaktivieren“
+ * liegt. */
+let delTarget = null;
+
+function openDelete(name, id) {
+    delTarget = {id: id, name: name};
+    document.getElementById('delName').textContent = name;
+    document.getElementById('delConfirm').value = '';
+    document.getElementById('delDo').disabled = true;
+    document.getElementById('delAlert').classList.add('d-none');
+    new bootstrap.Modal(document.getElementById('delModal')).show();
+}
+
+document.getElementById('delConfirm')?.addEventListener('input', function () {
+    document.getElementById('delDo').disabled =
+        !delTarget || this.value.trim() !== delTarget.name;
+});
+
+document.getElementById('delDo')?.addEventListener('click', async function () {
+    if (!delTarget) return;
+    const box = document.getElementById('delAlert');
+    box.classList.add('d-none');
+
+    this.disabled = true;
+    const result = await api('/api/users/' + delTarget.id, {method: 'DELETE'});
+    this.disabled = false;
+
+    if (!result.ok) {
+        showAlert(box, 'danger', result.data.error || 'Löschen fehlgeschlagen.');
+        document.getElementById('delDo').disabled = false;
+        return;
     }
+
+    const geloescht = delTarget.name;
+    bootstrap.Modal.getInstance(document.getElementById('delModal')).hide();
+    await loadUsers();
+    showAlert(document.getElementById('pageAlert'), 'success',
+              'Konto „' + geloescht + '“ wurde endgültig gelöscht.');
+    delTarget = null;
 });
 
 document.getElementById('showPwCopy')?.addEventListener('click', function () {
@@ -224,11 +294,19 @@ document.getElementById('userRows')?.addEventListener('click', async function (e
         return;
     }
 
+    if (act === 'delete') {
+        openDelete(name, id);
+        return;
+    }
+
     if (act === 'deactivate') {
         if (!confirm('Benutzer „' + name + '“ deaktivieren?\n\n' +
                      'Die Anmeldung wird sofort gesperrt. Das Konto und die ' +
                      'Zuordnung im Audit-Log bleiben erhalten.')) return;
-        const r = await api('/api/users/' + id, {method: 'DELETE'});
+        const r = await api('/api/users/' + id, {
+            method: 'PUT',
+            body: JSON.stringify({active: false})
+        });
         await loadUsers();
         showAlert(document.getElementById('pageAlert'),
                   r.ok ? 'success' : 'danger',

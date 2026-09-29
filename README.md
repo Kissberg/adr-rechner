@@ -157,9 +157,15 @@ docker run -d \
   -v adr_data:/app/data \
   -v adr_exports:/app/exports \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
-  -e ADR_ADMIN_PASSWORD="<starkes-passwort>" \
+  -e ADR_SMTP_USER="<postfach@betrieb.de>" \
+  -e ADR_SMTP_PASSWORD="<postfachpasswort>" \
   kissberg/adr-rechner:latest
 ```
+
+Beim ersten Start ist `admin`/`admin` gültig — der Wechsel wird bei der
+ersten Anmeldung erzwungen. Soll die Instanz sofort mit einem eigenen
+Startpasswort hochkommen, zusätzlich `-e ADR_ADMIN_PASSWORD="<starkes-passwort>"`
+setzen.
 
 Danach **http://localhost:5050** im Browser öffnen.
 
@@ -180,6 +186,12 @@ services:
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY muss gesetzt werden}
       - ADR_ADMIN_USER=${ADR_ADMIN_USER:-admin}
       - ADR_ADMIN_PASSWORD=${ADR_ADMIN_PASSWORD:-}
+      - ADR_SMTP_HOST=${ADR_SMTP_HOST:-smtp.ionos.de}
+      - ADR_SMTP_PORT=${ADR_SMTP_PORT:-587}
+      - ADR_SMTP_USER=${ADR_SMTP_USER:-}
+      - ADR_SMTP_PASSWORD=${ADR_SMTP_PASSWORD:-}
+      - ADR_MAIL_FROM=${ADR_MAIL_FROM:-}
+      - ADR_MAIL_APP_URL=${ADR_MAIL_APP_URL:-}
 
 volumes:
   adr_data:
@@ -251,9 +263,15 @@ hartcodierten Geheimnisse mehr im Quellcode.
 | `SECRET_KEY` | **ja** | zufällig | Sitzungsschlüssel. Ohne Wert werden nach jedem Neustart alle Anmeldungen ungültig. |
 | `AUTH_ENABLED` | nein | `1` | `0` schaltet die Anmeldung ab — **nur für lokale Entwicklung**. |
 | `ADR_ADMIN_USER` | nein | `admin` | Benutzername des ersten Administrators. |
-| `ADR_ADMIN_PASSWORD` | nein | zufällig | Passwort des ersten Administrators. Ohne Wert wird ein zufälliges erzeugt und in `.admin_password` im Datenverzeichnis abgelegt (**nicht** im Log). |
-| `ADR_REQUIRE_ADMIN_PASSWORD` | nein | `0` | `1` verweigert den Start, wenn `ADR_ADMIN_PASSWORD` fehlt — **im Produktivbetrieb empfohlen**. |
-| `ADR_ADMIN_PASSWORD_FILE` | nein | `<Datenverz>/.admin_password` | Alternativer Ort für die Passwortdatei. |
+| `ADR_ADMIN_PASSWORD` | nein | `admin` | Startpasswort des **ersten** Administrators. Der Wechsel ist bei der ersten Anmeldung erzwungen. Ohne Wert gilt der dokumentierte Erstzugang `admin`/`admin`. |
+| `ADR_SMTP_HOST` | nein | `smtp.ionos.de` | Mailserver für die Zustellung von Anfangspasswörtern. |
+| `ADR_SMTP_PORT` | nein | `587` | Port (STARTTLS). |
+| `ADR_SMTP_USER` | für Versand | — | Postfach für den Versand. Fehlt der Wert, gilt der Versand als nicht eingerichtet. |
+| `ADR_SMTP_PASSWORD` | für Versand | — | Passwort des Postfachs. |
+| `ADR_MAIL_FROM` | nein | `ADR_SMTP_USER` | Absenderadresse. |
+| `ADR_MAIL_APP_NAME` | nein | `ADR 1000-Punkte-Rechner` | Name in Betreff und Signatur. |
+| `ADR_MAIL_APP_URL` | nein | — | Adresse der Anwendung für den Anmeldelink in der E-Mail. |
+| `ADR_SMTP_STARTTLS` | nein | `1` | `0` verwendet implizites TLS (`SMTP_SSL`, z. B. Port 465). |
 | `ADR_PASSWORD_MIN_LENGTH` | nein | `12` | Mindestlänge neuer Passwörter (kleiner als 8 wird nicht akzeptiert). |
 | `ADR_MAX_LOGIN_ATTEMPTS` | nein | `10` | Fehlversuche, nach denen ein Konto gesperrt wird. |
 | `ADR_LOGIN_LOCKOUT_MINUTES` | nein | `15` | Dauer der Sperre. |
@@ -286,28 +304,56 @@ Bei 10 Fehlversuchen wird das Konto 15 Minuten gesperrt. Gezählt wird über
 den Benutzernamen, nicht die IP-Adresse — sonst würde ein Wechsel der
 Quell-IP das Limit umgehen.
 
-### Warum das erzeugte Passwort nicht im Log steht
+### Erstzugang: `admin` / `admin` — und warum das vertretbar ist
 
-Wird kein `ADR_ADMIN_PASSWORD` gesetzt, erzeugt die Anwendung ein
-Zufallspasswort und schreibt es in `.admin_password` im Datenverzeichnis.
-Das Log nennt nur den Pfad, niemals das Passwort selbst.
+Bei der ersten Inbetriebnahme legt die Anwendung einen Administrator
+`admin` mit dem Passwort `admin` an. Dieses Passwort ist bewusst fest und
+öffentlich dokumentiert: eine Erstinstallation braucht damit **keine**
+vorherige Zugangsdatenverteilung, und es gibt keine Passwortdatei, die
+gelesen, geschützt und nach der ersten Anmeldung gelöscht werden müsste.
 
-Der Grund: Logs sind grundsätzlich **breiter lesbar und länger verfügbar**
-als die Anwendung. `docker logs` zeigt sie jedem mit Docker-Zugang, der
-`json-file`-Treiber hält sie in drei Rotationen à 10 MB vor, und in
-Betrieben mit ELK/Loki/Grafana sind sie wochenlang durchsuchbar — für
-deutlich mehr Personen als die Datenbank. Ein einmalig erzeugtes
-Administratorpasswort im Log wäre faktisch ein dauerhaft gültiger
-Admin-Zugang für alle, die Logs lesen dürfen.
+Tragbar ist das nur, weil der Standard ausschließlich bis zur ersten
+Anmeldung gilt:
 
-Die Datei wird mit Rechten nur für den Besitzer angelegt (Unix `0600`,
-unter Windows per `icacls` auf das eigene Konto beschränkt) und nach dem
-ersten Passwortwechsel automatisch gelöscht. Kann sie nicht geschrieben
-werden, **verweigert die Anwendung den Start** — sie fällt nicht darauf
-zurück, das Passwort doch ins Log zu schreiben.
+* Das Konto entsteht mit `must_change_password = 1`.
+* Die Anmeldung führt **direkt** auf die Seite zum Passwortwechsel.
+* Jede andere Route — auch jede API — antwortet bis dahin mit `403`
+  (`{"must_change_password": true}`). Es gibt keinen Weg daran vorbei.
+* Das neue Passwort wird gegen die Richtlinie geprüft; `admin` selbst wird
+  dabei abgelehnt.
+* Bis der Wechsel erfolgt ist, steht in der Benutzerverwaltung der Zustand
+  **„Passwortwechsel offen"**.
 
-Für den Produktivbetrieb `ADR_REQUIRE_ADMIN_PASSWORD=1` setzen: Dann
-verweigert die Anwendung den Start, solange kein Passwort gesetzt ist.
+Daraus folgen zwei Betriebsbedingungen:
+
+1. Die Instanz darf in der Erstphase nicht aus einem Netz erreichbar sein,
+   in dem jemand anderes als Erster `admin`/`admin` eingeben könnte. Für
+   alles darüber hinaus gehört sie hinter TLS (`PREFER_SECURE_COOKIE=1`,
+   Reverse-Proxy).
+2. Wer den Erstzugang vorbelegen will, setzt `ADR_ADMIN_PASSWORD` beim
+   ersten Start. Auch dieser Wert wird beim ersten Anmelden ersetzt.
+
+Der Erstzugang wird **nur in eine leere Benutzertabelle** geschrieben. Ein
+gelöschter oder umbenannter `admin` taucht nicht bei jedem Neustart wieder
+auf — dafür gibt es `manage.py bootstrap-admin`.
+
+### Anfangspasswörter per E-Mail
+
+Wird beim Anlegen eines Kontos kein Passwort vorgegeben, erzeugt die
+Anwendung eines und sendet es an die hinterlegte E-Mail-Adresse. Der
+Administrator erfährt das Passwort damit nicht — die Nutzung ist von Anfang
+an personenbezogen, und es gibt keine Zettelübergabe.
+
+Dafür sind `ADR_SMTP_USER` und `ADR_SMTP_PASSWORD` zu setzen (Standard:
+`smtp.ionos.de:587`, STARTTLS). Mit `ADR_MAIL_APP_URL` wird der
+Anmeldelink in die Nachricht aufgenommen.
+
+Ist kein Versand eingerichtet, scheitert das Anlegen **nicht**: das
+erzeugte Passwort wird dann einmalig auf dem Bildschirm angezeigt, und die
+Benutzerverwaltung weist oben auf die fehlende Konfiguration hin. Ein
+Zustellfehler (falsches Postfachpasswort, abgelehnter Empfänger) lässt das
+Konto ebenfalls bestehen; die Meldung nennt den technischen Grund.
+**Niemals im Log** — weder das Passwort noch der Nachrichteninhalt.
 
 ### Rollen
 
@@ -329,23 +375,40 @@ nicht umkehrbar.
 ### Benutzerverwaltung
 
 Administratoren legen unter **Benutzerverwaltung** (Menü oben rechts) die
-Konten an. Ein Kennwort kann vorgegeben oder erzeugt werden; ein erzeugtes
-wird **genau einmal** angezeigt und erscheint niemals im Log. Jedes so
-vergebene Passwort muss bei der ersten Anmeldung ersetzt werden.
+Konten an. Angegeben werden **Benutzername, E-Mail-Adresse und Rolle**; ein
+Anfangspasswort ist optional. Bleibt das Feld leer, erzeugt die Anwendung
+eines und sendet es per E-Mail an die Person. Jedes so vergebene Passwort
+muss bei der ersten Anmeldung ersetzt werden.
 
-Konten werden **deaktiviert, nicht gelöscht** — das Audit-Log verweist über
-den Benutzernamen auf das Konto, eine Zeilenlöschung würde diese Zuordnung
-zerstören. Der letzte aktive Administrator kann sich weder selbst
-herabstufen noch deaktivieren.
+Zwei Vorgänge sind bewusst getrennt:
+
+* **Deaktivieren** sperrt die Anmeldung sofort; das Konto und seine
+  Zuordnung im Audit-Log bleiben erhalten. Der Regelfall bei Austritt,
+  Krankheit oder Umzug — und umkehrbar.
+* **Löschen** entfernt den Datensatz endgültig (Fehlanlagen, Testkonten,
+  Löschbegehren nach Art. 17 DSGVO). Ein Audit-Eintrag hält fest, wer wann
+  welches Konto gelöscht hat; die Fehlversuche des Kontos werden
+  mitentfernt, damit der Name wieder frei verwendbar ist. Zur Bestätigung
+  muss der Benutzername eingetippt werden.
+
+Der letzte aktive Administrator kann weder sich selbst herabstufen,
+deaktivieren oder löschen noch von einem anderen Konto gelöscht werden.
 
 Ein vergessenes Administratorkonto lässt sich nur auf dem Server zurücksetzen:
 
 ```bash
 docker exec -it adr-rechner python manage.py list-users
 docker exec -it adr-rechner python manage.py reset-password admin
-docker exec -it adr-rechner python manage.py unlock admin     # Sperre aufheben
-docker exec -it adr-rechner python manage.py check            # Bestand prüfen
+docker exec -it adr-rechner python manage.py bootstrap-admin   # Erstzugang setzen
+docker exec -it adr-rechner python manage.py delete-user name  # endgültig löschen
+docker exec -it adr-rechner python manage.py unlock admin      # Sperre aufheben
+docker exec -it adr-rechner python manage.py check             # Bestand prüfen
 ```
+
+`bootstrap-admin` ist der einzige Weg, der die Passwortrichtlinie umgeht —
+er setzt `admin`/`admin` (bzw. `ADR_ADMIN_PASSWORD`) und erzwingt den
+Wechsel bei der nächsten Anmeldung. Ohne ihn wäre eine Instanz, deren
+Administratorkonto gelöscht wurde, nicht mehr erreichbar.
 
 ### Eine Instanz je Niederlassung
 
@@ -362,7 +425,8 @@ docker run -d --name adr-muenchen \
   -v adr_muenchen_exports:/app/exports \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   -e ADR_ADMIN_PASSWORD="<starkes-passwort>" \
-  -e ADR_REQUIRE_ADMIN_PASSWORD=1 \
+  -e ADR_SMTP_USER="<postfach@betrieb.de>" \
+  -e ADR_SMTP_PASSWORD="<postfachpasswort>" \
   -e ADR_AUDIT_RETENTION_DAYS=3650 \
   kissberg/adr-rechner:latest
 
@@ -373,7 +437,8 @@ docker run -d --name adr-hamburg \
   -v adr_hamburg_exports:/app/exports \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   -e ADR_ADMIN_PASSWORD="<anderes-starkes-passwort>" \
-  -e ADR_REQUIRE_ADMIN_PASSWORD=1 \
+  -e ADR_SMTP_USER="<postfach@betrieb.de>" \
+  -e ADR_SMTP_PASSWORD="<postfachpasswort>" \
   kissberg/adr-rechner:latest
 ```
 
@@ -393,8 +458,8 @@ docker run -d \
   -v adr_data:/app/data \
   -v adr_exports:/app/exports \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
-  -e ADR_ADMIN_PASSWORD="<starkes-passwort>" \
-  -e ADR_REQUIRE_ADMIN_PASSWORD=1 \
+  -e ADR_SMTP_USER="<postfach@betrieb.de>" \
+  -e ADR_SMTP_PASSWORD="<postfachpasswort>" \
   -e PREFER_SECURE_COOKIE=1 \
   -e ADR_AUDIT_RETENTION_DAYS=3650 \
   kissberg/adr-rechner:latest

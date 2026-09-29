@@ -7,7 +7,8 @@
         <p class="text-muted small mb-0">
             Jede Niederlassung betreibt eine eigene Instanz dieser Anwendung.
             Legen Sie hier die Konten für die Sachbearbeiter dieser
-            Niederlassung an.
+            Niederlassung an — Benutzername und E-Mail-Adresse genügen, das
+            Anfangspasswort wird der Person zugesendet.
         </p>
     </div>
     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#neuModal">
@@ -17,12 +18,23 @@
 
 <div id="pageAlert" class="alert d-none"></div>
 
+{% if not mail_configured %}
+<div class="alert alert-warning">
+    <strong>E-Mail-Versand ist nicht eingerichtet.</strong>
+    Anfangspasswörter können deshalb nicht zugesendet werden; sie werden
+    einmalig auf dem Bildschirm angezeigt. Für den Versand sind
+    <code>ADR_SMTP_USER</code> und <code>ADR_SMTP_PASSWORD</code> zu setzen
+    (siehe Handbuch).
+</div>
+{% endif %}
+
 <div class="card">
     <div class="table-responsive">
         <table class="table table-hover align-middle mb-0">
             <thead class="table-light">
                 <tr>
                     <th>Benutzername</th>
+                    <th>E-Mail</th>
                     <th>Rolle</th>
                     <th>Status</th>
                     <th>Passwort</th>
@@ -32,7 +44,7 @@
                 </tr>
             </thead>
             <tbody id="userRows">
-                <tr><td colspan="7" class="text-center text-muted py-4">Lade …</td></tr>
+                <tr><td colspan="8" class="text-center text-muted py-4">Lade …</td></tr>
             </tbody>
         </table>
     </div>
@@ -41,9 +53,15 @@
 <div class="alert alert-secondary mt-3 small">
     <strong>Rollen.</strong>
     <em>Administrator</em> darf zusätzlich Stammdaten pflegen (UN-Datenbank,
-    ADR-Import), das Audit-Log einsehen und Daten löschen.
+    ADR-Import), Benutzer verwalten und das Audit-Log einsehen.
     <em>Benutzer</em> rechnet, erstellt Beförderungspapiere und pflegt Kunden
     und Adressen.
+    <br>
+    <strong>Deaktivieren oder löschen.</strong>
+    <em>Deaktivieren</em> sperrt die Anmeldung sofort, das Konto bleibt aber
+    mit seiner Zuordnung im Audit-Log erhalten — der Regelfall bei Austritt
+    oder Vertretung. <em>Löschen</em> entfernt das Konto endgültig; im
+    Audit-Log bleibt vermerkt, wer wann welches Konto gelöscht hat.
 </div>
 
 <div class="modal fade" id="neuModal" tabindex="-1" aria-hidden="true">
@@ -66,6 +84,15 @@
                     </div>
                 </div>
                 <div class="mb-3">
+                    <label class="form-label" for="neuEmail">E-Mail-Adresse</label>
+                    <input type="email" class="form-control" id="neuEmail"
+                           placeholder="z. B. m.mustermann@firma.de"
+                           autocomplete="off">
+                    <div class="form-text">
+                        Zustelladresse für das Anfangspasswort.
+                    </div>
+                </div>
+                <div class="mb-3">
                     <label class="form-label" for="neuRole">Rolle</label>
                     <select class="form-select" id="neuRole">
                         <option value="user" selected>Benutzer</option>
@@ -74,16 +101,17 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label" for="neuPw">
-                        Passwort <span class="text-muted">(optional)</span>
+                        Anfangspasswort <span class="text-muted">(optional)</span>
                     </label>
                     <input type="text" class="form-control" id="neuPw"
                            autocomplete="off"
-                           placeholder="Leer lassen — wird erzeugt">
+                           placeholder="Leer lassen — wird erzeugt und gemailt">
                     <div class="form-text">
-                        Mindestens {{ min_password_length }} Zeichen. Bleibt das
-                        Feld leer, erzeugt die Anwendung ein Passwort und zeigt
-                        es einmalig an. Die Person muss es bei der ersten
-                        Anmeldung ohnehin ändern.
+                        Bleibt das Feld leer, erzeugt die Anwendung ein
+                        Passwort und sendet es an die Adresse oben. Mindestens
+                        {{ min_password_length }} Zeichen, wenn Sie selbst
+                        eines vorgeben. In jedem Fall muss die Person es bei
+                        der ersten Anmeldung ändern.
                     </div>
                 </div>
             </div>
@@ -115,10 +143,9 @@
                            autocomplete="off" placeholder="Leer lassen — wird erzeugt">
                 </div>
                 <p class="small text-muted mb-0">
-                    Die betroffene Person muss das Passwort bei der nächsten
-                    Anmeldung ändern. Bis dahin ist die Nutzung nicht
-                    personenbezogen — der Hinweis im Audit-Log bleibt aber
-                    bestehen.
+                    Bleibt das Feld leer, wird ein Passwort erzeugt und per
+                    E-Mail zugesendet. Die betroffene Person muss es bei der
+                    nächsten Anmeldung ändern.
                 </p>
             </div>
             <div class="modal-footer">
@@ -127,6 +154,44 @@
                 </button>
                 <button type="button" class="btn btn-warning" id="pwReset">
                     Passwort zurücksetzen
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="delModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title">
+                    <i class="bi bi-trash me-1"></i>Konto endgültig löschen
+                </h5>
+                <button type="button" class="btn-close btn-close-white"
+                        data-bs-dismiss="modal" aria-label="Schließen"></button>
+            </div>
+            <div class="modal-body">
+                <div id="delAlert" class="alert d-none"></div>
+                <p>
+                    Das Konto <strong id="delName"></strong> wird mit allen
+                    Zugangsdaten gelöscht. Das kann <strong>nicht</strong>
+                    rückgängig gemacht werden. Soll der Zugang nur gesperrt
+                    werden, nehmen Sie stattdessen <em>Deaktivieren</em>.
+                </p>
+                <div class="mb-3">
+                    <label class="form-label" for="delConfirm">
+                        Zur Bestätigung den Benutzernamen eingeben
+                    </label>
+                    <input type="text" class="form-control" id="delConfirm"
+                           autocomplete="off" placeholder="Benutzername">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    Abbrechen
+                </button>
+                <button type="button" class="btn btn-danger" id="delDo" disabled>
+                    Endgültig löschen
                 </button>
             </div>
         </div>

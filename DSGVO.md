@@ -144,9 +144,11 @@ abhängt.
 | Mandantentrennung | **Eine Instanz je Niederlassung** (siehe README) — keine gemeinsame Datenhaltung |
 | Nachvollziehbarkeit | Audit-Log für Anmeldungen und Änderungen |
 | Datenminimierung | Im Audit-Log werden bei Kundenänderungen nur die **Feldnamen** protokolliert, nicht die Werte |
-| Löschung | Kunden, Sendungen und zugehörige PDF-Dateien sind löschbar |
+| Löschung | Kunden, Sendungen, zugehörige PDF-Dateien **und Benutzerkonten** sind löschbar (Art. 17) |
 | Betroffenenrechte | Datenauskunft als JSON je Kunde herunterladbar |
-| Fehlkonfiguration | Ohne `ADR_ADMIN_PASSWORD` bei gesetztem `ADR_REQUIRE_ADMIN_PASSWORD=1` startet die Anwendung nicht |
+| Erstzugang | Erster Administrator `admin`/`admin`; der Wechsel ist bei der ersten Anmeldung erzwungen und alle anderen Routen sind bis dahin gesperrt |
+| Keine Weitergabe von Passwörtern | Anfangspasswörter werden der betroffenen Person per E-Mail zugestellt, nicht dem Administrator angezeigt |
+| Fehlkonfiguration | Ohne `ADR_SMTP_USER`/`ADR_SMTP_PASSWORD` wird kein Passwort versendet; die Anwendung zeigt es einmalig an und weist auf die fehlende Konfiguration hin |
 
 ### Vom Betreiber sicherzustellen
 
