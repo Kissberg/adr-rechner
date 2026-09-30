@@ -1,171 +1,159 @@
 # ADR 1000-Punkte-Rechner
 
-Gefahrgut-Transportberechnung nach **ADR 1.1.3.6** — der 1000-Punkte-Regel.
-Berechnen Sie, ob Ihr Gefahrguttransport unter die Freistellung fällt, und
-erstellen Sie rechtskonforme Beförderungspapiere (ADR Transport Document).
+Webanwendung für **Gefahrguttransporte in Verpackungen**: berechnet die
+Punktzahl nach **ADR 1.1.3.6** (der *1000-Punkte-Regel*), stellt fest, ob die
+Beförderung freigestellt ist, und erzeugt das **Beförderungspapier** nach
+ADR 5.4.1 als PDF.
 
-> **English:** Dangerous goods transport calculation under ADR 1.1.3.6 (1000-point rule).
-> Check exemption eligibility and generate compliant transport documents.
+Gedacht für kleine und mittlere Betriebe, die gelegentlich Gefahrgut versenden
+und dafür kein ERP-Modul und keine Cloud-Datenbank brauchen: eine Instanz im
+eigenen Netz (oder hinter einem Reverse-Proxy), Oberfläche vollständig deutsch,
+keine externen Dienste.
+
+> **English:** Dangerous goods transport calculation under ADR 1.1.3.6 (the
+> 1000-point rule) for packaged goods, including exemption checking and
+> generation of the ADR 5.4.1 transport document as PDF. German-language web
+> application, deployed as a single Docker container.
 
 <p align="center">
-  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
-  <img alt="Version 2.0" src="https://img.shields.io/badge/version-2.0-orange">
-  <img alt="Platform: x86-64" src="https://img.shields.io/badge/platform-x86--64-lightgrey">
+  <img alt="Version 4.2" src="https://img.shields.io/badge/version-4.2-green">
+  <img alt="Tests: 160" src="https://img.shields.io/badge/tests-160-brightgreen">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="ADR 2025" src="https://img.shields.io/badge/ADR-2025-informational">
+  <img alt="Platform: Docker" src="https://img.shields.io/badge/docker-amd64%20%7C%20arm64-lightgrey">
   <img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/kissberg/adr-rechner">
 </p>
 
----
-
-## ⚠️ Wichtiges Update — Version 2.0
-
-Version 2.0 schließt **rechtlich und sicherheitstechnisch kritische Lücken**
-der Version 1.x. **Wer 1.x produktiv einsetzt, sollte umgehend aktualisieren.**
-
-| # | Problem in 1.x | Konsequenz | Status in 2.0 |
-|---|----------------|------------|---------------|
-| 1 | Freistellung nur nach `Punkte ≤ 1000` | Güter der Beförderungskategorie 0 (u. a. bestimmte Stoffe der Klassen 1, 6.2 und 7) wurden fälschlich freigestellt | ✅ Vollständige 1.1.3.6-Prüfung über die Beförderungskategorie |
-| 2 | Feld `max_quantity_per_transport` vorhanden, aber nie geprüft | Höchstmenge je Beförderungseinheit (1.1.3.6.3) wurde ignoriert | ✅ wird geprüft und blockiert |
-| 3 | Keine Unterscheidung Stückgut / Tank / Schüttgut | Tanktransport konnte fälschlich freigestellt werden | ✅ Beförderungsart ist Pflichtfeld |
-| 4 | `DEBUG=True`, Bindung an `0.0.0.0`, hartcodierter Secret Key | Werkzeug-Debugger von außen erreichbar (RCE-Risiko) | ✅ behoben, Konfiguration über Umgebungsvariablen |
-| 5 | Keine Anmeldung | Jeder im Netz konnte Stamm- und Personendaten ändern/löschen | ✅ Anmeldepflicht mit Rollen `admin` / `user` |
-| 6 | Kein Änderungsprotokoll | Änderungen an Kategorie/Punktfaktor nicht nachvollziehbar | ✅ Audit-Log (append-only) |
-| 7 | `escapeHtml()` escapete keine Anführungszeichen | XSS in Attributkontexten möglich | ✅ behoben |
-| 8 | Keine Tests | Regressionen blieben unbemerkt | ✅ 30 Unit-Tests für die Regelengine |
-| 9 | Jede Berechnung erzeugte eine Sendung | Datenbestand wurde mit Testrechnungen aufgebläht | ✅ Trennung Vorschau / Speichern |
-| 10 | UN-Daten enthielten Dubletten, fehlende Kategorie wurde als Kat. 3 angenommen | Falsche Zuordnung möglich | ✅ Dubletten entfernt, Fail-Safe statt Standardwert |
-
-> **Hinweis für Bestandsnutzer:** In 1.x gespeicherte Sendungen besitzen kein
-> gespeichertes Prüfergebnis. Für diese Altdaten wird beim PDF-Aufruf
-> konservativ **„nicht freigestellt“** angenommen.
+![1000-Punkte-Rechner](docs/images/rechner.png)
 
 ---
 
-## ⚠️ Wichtiges Update — Version 3.0: Datenquelle und Variantenlogik
+## Inhalt
 
-Version 3.0 ersetzt die Datenbasis und korrigiert einen Fehler, der zu
-**falschen Punktzahlen** führen konnte.
+- [Was das Programm leistet](#was-das-programm-leistet)
+- [Versionshistorie — was sich verbessert hat](#versionshistorie--was-sich-verbessert-hat)
+- [Schnellstart](#schnellstart)
+- [Erste Anmeldung](#erste-anmeldung)
+- [Die Seiten der Anwendung](#die-seiten-der-anwendung)
+- [ADR 1.1.3.6 — die 1000-Punkte-Regel](#adr-1136--die-1000-punkte-regel)
+- [Betrieb und Administration](#betrieb-und-administration)
+- [Datenbasis und Lizenz der Daten](#datenbasis-und-lizenz-der-daten)
+- [Sicherheit und Datenschutz](#sicherheit-und-datenschutz)
+- [Dokumentation](#dokumentation)
+- [Entwicklung](#entwicklung)
+- [Lizenz und Haftung](#lizenz-und-haftung)
 
-### Warum: das PDF ist als Datenquelle ungeeignet
+---
 
-Tabelle A (Kapitel 3.2) ist eine 20-spaltige Tabelle, die über zwei
-gegenüberliegende Seiten läuft. Wird sie als Text gelesen, gehen die
-Spaltengrenzen verloren. Die Beförderungskategorie musste deshalb geschätzt
-werden — und wenn nichts gefunden wurde, wurde ersatzweise **Kategorie 3**
-angenommen. Bei einer Freistellungsentscheidung nach ADR 1.1.3.6 ist das
-ein untragbares Risiko.
+## Was das Programm leistet
 
-### Was sich ändert
+| Bereich | Leistung |
+|---|---|
+| **1000-Punkte-Rechner** | Gefahrgutpositionen erfassen, Punktzahl live berechnen, alle vier Voraussetzungen der Freistellung prüfen, blockierende Gründe im Klartext ausweisen |
+| **Beförderungspapier** | ADR-konformes PDF nach 5.4.1.1 mit Positionen (UN-Nr., Benennung, Klasse, VG, Stückzahl, Menge, Tunnelcode), Absender, Empfänger, Erklärung und Unterschriftzeilen |
+| **UN-Datenbank** | 3.374 Varianten zu 2.347 UN-Nummern aus der amtlichen BAM-Datenbank, filter- und editierbar |
+| **Datenpflege** | Import der amtlichen BAM-Datei, Verifikation gegen das ADR-PDF inkl. Prüfsummen von 1.1.3.6 und 5.4.1.1 |
+| **Stammdaten** | Kunden und Versandadressen, Excel-Import und -Vorlage, Datenauskunft nach Art. 15/20 DSGVO |
+| **Benutzer und Rollen** | Administrator und Benutzer, erzwungener Startpasswort-Wechsel, Kontosperre nach Fehlversuchen, Mailversand von Anfangspasswörtern |
+| **Nachvollziehbarkeit** | Audit-Log über Änderungen an Stammdaten, Sendungen, Benutzern und Importen |
+| **Betrieb** | ein Container, SQLite-Datei, Healthcheck, Betrieb ohne Internetzugang möglich |
 
-| | bis 2.x | ab 3.0 |
+**Bewusste Entscheidungen:** Die Regelengine ist als eigenständiges Modul
+(`adr_rules.py`) ohne Flask-Abhängigkeit gebaut und deshalb direkt testbar.
+Die Freistellung entscheidet sich **ausschließlich** über die
+Beförderungskategorie aus der amtlichen Datenbank — es gibt keine
+klassenbasierten Pauschalausschlüsse und keine geschätzten Werte. Widersprüchliche
+oder fehlende Angaben führen zum Fail-Safe: **nicht** freigestellt.
+
+---
+
+## Versionshistorie — was sich verbessert hat
+
+Jede Version hat einen konkreten Anlass. Die vollständige Begründung,
+Einzelmaßnahmen und Testzahlen stehen in [CHANGELOG.md](CHANGELOG.md).
+
+| Version | Anlass | Kern der Verbesserung |
 |---|---|---|
-| Datenquelle | ADR-PDF, heuristisch geparst | **amtliche BAM-Datei** (Datenbank GEFAHRGUT), strukturiert |
-| Beförderungskategorie | geschätzt, Default Kat. 3 | eigenes Feld der BAM — **nichts wird geraten** |
-| Punktfaktor | aus der Kategorie abgeleitet | von der BAM mitgeliefert (`N_MULTIPLIKATOR`) |
-| Varianten | `UPDATE … WHERE un_number = ?` | Schlüssel ist **(UN-Nummer, Variante)** |
-| ADR-PDF | Datenquelle | **nur Verifikation und Änderungsaufsicht** |
-| Zusätzliche Felder | — | LQ, EQ, Kemler-Zahl, Klassifizierungscode, Tankcode, Gefahrzettel |
+| **4.2** | Zugangsdaten lagen in der Container-Konfiguration | **Mailserver wird in der Anwendung gepflegt** (`Einstellungen`), `ADR_SMTP_*`/`ADR_MAIL_*` entfallen; Postfachwechsel ohne neuen Container |
+| **4.1** | Startpasswort musste vorab verteilt werden | **Erstzugang `admin`/`admin`** mit erzwungenem Wechsel, Anfangspasswort optional per E-Mail, Konten **deaktivieren oder endgültig löschen** |
+| **4.0** | Auslieferung an einen Betrieb mit mehreren Standorten | **Benutzerverwaltung** mit Rollen, Passwortrichtlinie, Kontosperre, Audit-Log, DSGVO-Lücken geschlossen |
+| **3.0** | Fehlerhafte Punktzahlen durch geschätzte Kategorien | **Amtliche BAM-Daten** statt PDF-Parsing, Variantenschlüssel (UN-Nummer, VG), ADR-PDF nur noch Verifikation |
+| **2.0** | Freistellung allein nach Punktzahl war rechtlich falsch | Vollständige Prüfung der **vier kumulativen Voraussetzungen** nach 1.1.3.6, Anmeldepflicht, Audit-Log |
 
-### Der Variantenfehler
+### 4.2 — Mailversand gehört in die Anwendung
 
-Eine UN-Nummer hat in Tabelle A mehrere Varianten, und die
-Beförderungskategorie hängt an der Verpackungsgruppe:
+Die Zugangsdaten des Mailservers lagen in Umgebungsvariablen und damit im
+Container. Für einen Postfachwechsel brauchte es einen neuen Container, und ein
+weitergegebenes Image hätte fremde Zugangsdaten mitgeführt. Seit 4.2 stehen sie
+in der Tabelle `settings` dieser Instanz (Seite **Einstellungen**, nur
+Administratoren):
 
-```
-UN 1133 KLEBSTOFFE    PG I → Kat 1 (Faktor 50)
-                      PG II → Kat 2 (Faktor 3)
-                      PG III → Kat 3 (Faktor 1)
-```
+* Änderungen wirken **sofort**, ohne Neustart; `ADR_SMTP_*`/`ADR_MAIL_*` gibt es
+  nicht mehr.
+* Das Postfachpasswort wird **nie angezeigt und nie protokolliert** — die
+  Oberfläche erfährt nur, *ob* eines hinterlegt ist.
+* *Verbindung testen* meldet sich am Mailserver an, **ohne** eine Nachricht zu
+  senden.
 
-Insgesamt betrifft das **354 UN-Nummern**. Ein Update nur auf die UN-Nummer
-überschreibt diese Werte gegenseitig — es würde beispielsweise für alle drei
-Verpackungsgruppen Kategorie 3 stehen. Seit 3.0 ist `(un_number, variant)`
-der natürliche Schlüssel, abgesichert durch einen eindeutigen Index.
+### 4.1 — Erstzugang ohne Passwortverteilung
 
-### Qualität der Datenbasis
+Der erste Administrator entsteht als `admin`/`admin` (`ADR_ADMIN_PASSWORD`
+optional) und **muss** bei der ersten Anmeldung ein eigenes Passwort setzen;
+bis dahin antwortet jede Seite und jede Schnittstelle mit `403`. Damit braucht
+eine Erstinstallation keine vorab verteilten Zugangsdaten und keine
+Passwortdatei, die geschützt und wieder gelöscht werden müsste. Zusätzlich:
+E-Mail-Adresse je Konto, Anfangspasswort auf Wunsch per E-Mail, und die
+Trennung von **Deaktivieren** (umkehrbar, Konto bleibt im Audit-Log zuordenbar)
+und **Löschen** (endgültig, für Fehlanlagen und Art. 17 DSGVO).
 
-Abgleich der neuen BAM-Daten gegen den bisherigen Bestand (ADR 2025):
+### 4.0 — Mehrere Standorte, richtlinienkonforme Passwörter
 
-- **223 Abweichungen** behoben (Gefahrklasse 89, Verpackungsgruppe 86,
-  Beförderungskategorie 42, Tunnelcode 5, ein Datensatz ohne UN-Nummer)
-- Gegenprobe durch einen unabhängigen Parse des ADR-PDF:
-  **2.346 von 2.347 UN-Nummern stimmen überein (99,96 %)** — die einzige
-  Abweichung ist UN 3316, deren Spalte (15) «siehe SV 671 (E)» lautet und
-  nicht maschinell auflösbar ist.
+Benutzerverwaltung mit den Rollen *Administrator* und *Benutzer*, eine
+Passwortrichtlinie, die auf Länge setzt (BSI TR-02102-1, NIST SP 800-63B) statt
+auf Zeichenklassen, Sperre nach zehn Fehlversuchen, ein Audit-Log mit
+Aufbewahrungsfrist und die Datenauskunft nach Art. 15/20 DSGVO. Dabei wurden
+drei DSGVO-Lücken geschlossen — unter anderem schreibt das Audit-Log bei
+Kundenänderungen nur noch die **Feldnamen**, nicht die Werte.
 
-### Datenquelle und Lizenzpflicht
+### 3.0 — Amtliche Daten statt geschätzter Kategorien
 
-Die Daten stammen aus der **Datenbank GEFAHRGUT (DGG)** der
-Bundesanstalt für Materialforschung und -prüfung (BAM) und stehen unter der
-*Datenlizenz Deutschland – Namensnennung – Version 2.0* (`dl-de/by-2-0`).
-Sie sind seit dem 23.07.2025 kostenfrei und dürfen auch kommerziell
-genutzt werden. **Die Quellenangabe ist Lizenzpflicht** und wird in der
-Anwendung ausgegeben:
-
-```
-Source: Bundesanstalt für Materialforschung und -prüfung (BAM) –
-Datenbank GEFAHRGUT – URL: tes.bam.de/TES/Navigation/EN/DGG-Database/
-dgg-database.html — Data licence Germany – attribution – Version 2.0
-```
-
-> ⚠️ **Zwei Einschränkungen der BAM-Lizenz:**
-> 1. Die BAM untersagt gemäß § 44b (3) UrhG die Nutzung der Daten für
->    **Text- und Data-Mining**. Die Verwendung als Nachschlagetabelle in
->    dieser Anwendung ist zulässig; das Training von Modellen mit diesen
->    Daten benötigt die schriftliche Zustimmung der BAM.
-> 2. Die BAM übernimmt **keine Gewähr** für Richtigkeit und Vollständigkeit.
->    Eine Freistellungsentscheidung ist daher stets fachlich zu prüfen.
-
-### Import und Verifikation in der Anwendung
-
-Unter **„Daten & Verifikation“** werden beide Dateien hochgeladen:
-
-1. **BAM-Datei** (`ADR25.xlsx` oder `ADR25_csv.txt`) — wird importiert und
-   bildet den Datenbestand. Vor dem Import prüft eine Strukturprüfung die
-   Datei; bei Auffälligkeiten wird abgebrochen.
-2. **ADR-PDF** — schreibt **nicht** in die Datenbank. Es liefert
-   - einen Abgleich des eigenen PDF-Parse gegen den Datenbestand
-   - den Wortlaut von **1.1.3.6** (1000-Punkte-Regel) und **5.4.1.1**
-     (Beförderungspapier) samt Prüfsumme, damit Textänderungen
-     zwischen zwei ADR-Ausgaben auffallen.
-
-> **Hinweis:** ADR wird zweibändig veröffentlicht. Band 1 enthält die Teile
-> 1–3 (dort liegt 1.1.3.6), Band 2 die Teile 4–9 (dort liegt 5.4.1.1).
-> Fehlt ein Abschnitt in der hochgeladenen Datei, wird das ausdrücklich
-> gemeldet — es wird kein „nichts gefunden“ vorgetäuscht.
-
----
-
-## Funktionen
-
-- 🔢 **1000-Punkte-Berechnung** — Gesamtpunktzahl nach ADR 1.1.3.6: ∑(Menge × Faktor) pro Transportkategorie
-- 📋 **UN-Nummern-Datenbank** — rund 2.900 UN-Nummern mit Stoffbezeichnungen, Gefahrklassen, Verpackungsgruppen und Tunnelcodes
-- 📄 **Beförderungspapier (PDF)** — ADR-konformes Transportdokument mit allen Pflichtangaben (Absender, Empfänger, UN-Nr., Menge, Punkte, Tunnelcode)
-- 🏢 **Kundenverwaltung** — Kunden und Versandadressen (CRUD), Excel-Import/Export
-- 📥 **ADR-Datenimport** — automatisches Parsen aktueller ADR-PDFs (PyMuPDF) zur Aktualisierung der UN-Datenbank
-- 🌐 **Deutsche Oberfläche** — vollständig deutschsprachiges Web-Interface (Bootstrap 5)
+Tabelle A läuft als 20-spaltige Tabelle über zwei gegenüberliegende Seiten;
+beim Auslesen als Text gehen die Spaltengrenzen verloren. Die
+Beförderungskategorie wurde deshalb geschätzt — im Zweifel als *Kategorie 3*.
+Das ist bei einer Freistellungsentscheidung nicht vertretbar. Seit 3.0 kommen
+Kategorie und Punktfaktor aus der amtlichen **Datenbank GEFAHRGUT der BAM**,
+die 223 Abweichungen des Altbestands wurden korrigiert (Gegenprobe gegen einen
+unabhängigen PDF-Parse: 99,96 % Übereinstimmung). Der natürliche Schlüssel der
+UN-Daten ist **(UN-Nummer, Variante)** — 578 der 2.347 UN-Nummern sind
+mehrvariantig, und ein Update allein über die UN-Nummer hätte die
+Verpackungsgruppen gegenseitig überschrieben.
 
 ---
 
 ## Schnellstart
 
-### Docker (empfohlen)
+### Docker
 
 ```bash
 docker run -d \
   --name adr-rechner \
-  -p 5050:5050 \
+  --restart unless-stopped \
+  -p 127.0.0.1:5050:5050 \
   -v adr_data:/app/data \
   -v adr_exports:/app/exports \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
+  -e TZ=Europe/Berlin \
   kissberg/adr-rechner:latest
 ```
 
-Beim ersten Start ist `admin`/`admin` gültig — der Wechsel wird bei der
-ersten Anmeldung erzwungen. Soll die Instanz sofort mit einem eigenen
-Startpasswort hochkommen, zusätzlich `-e ADR_ADMIN_PASSWORD="<starkes-passwort>"`
-setzen.
+Danach **http://localhost:5050** öffnen. Beim ersten Start legt die Anwendung
+die Datenbank an und lädt die UN-Stammdaten aus der mitgelieferten BAM-Datei
+(Protokoll: `[seed] 3374 Varianten aus BAM-Datenbank GEFAHRGUT geladen.`).
 
-Danach **http://localhost:5050** im Browser öffnen.
+| Pfad im Container | Inhalt | Hinweis |
+|---|---|---|
+| `/app/data` | SQLite-Datenbank (Kunden, Sendungen, Benutzer, Einstellungen) | **als Volume mounten**, sonst ist der Bestand beim nächsten Container weg |
+| `/app/exports` | erzeugte Beförderungspapier-PDFs | ebenfalls als Volume |
 
 ### Docker Compose
 
@@ -176,14 +164,21 @@ services:
     container_name: adr-rechner
     restart: unless-stopped
     ports:
-      - "5050:5050"
+      - "127.0.0.1:5050:5050"
     volumes:
       - adr_data:/app/data
       - adr_exports:/app/exports
     environment:
+      - TZ=Europe/Berlin
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY muss gesetzt werden}
       - ADR_ADMIN_USER=${ADR_ADMIN_USER:-admin}
       - ADR_ADMIN_PASSWORD=${ADR_ADMIN_PASSWORD:-}
+      - PREFER_SECURE_COOKIE=${PREFER_SECURE_COOKIE:-0}
+      - ADR_PASSWORD_MIN_LENGTH=${ADR_PASSWORD_MIN_LENGTH:-12}
+      - ADR_MAX_LOGIN_ATTEMPTS=${ADR_MAX_LOGIN_ATTEMPTS:-10}
+      - ADR_LOGIN_LOCKOUT_MINUTES=${ADR_LOGIN_LOCKOUT_MINUTES:-15}
+      - ADR_AUDIT_RETENTION_DAYS=${ADR_AUDIT_RETENTION_DAYS:-3650}
+      - ADR_AUDIT_LOG_IP=${ADR_AUDIT_LOG_IP:-1}
 
 volumes:
   adr_data:
@@ -191,376 +186,316 @@ volumes:
 ```
 
 ```bash
+export SECRET_KEY="$(openssl rand -hex 32)"
 docker compose up -d
 ```
 
-### Manuelle Installation
-
-Voraussetzungen: **Python 3.11+** und `libfreetype6` (für die PDF-Generierung).
+### Ohne Docker
 
 ```bash
 git clone https://github.com/Kissberg/adr-rechner.git
 cd adr-rechner
+python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-python app.py
+python app.py          # hört auf 127.0.0.1:5050
 ```
+
+Voraussetzungen: **Python 3.11+** und `libfreetype6` (für die PDF-Erzeugung).
+Für Zugriff aus dem Netz `ADR_HOST=0.0.0.0` setzen — produktiv nur hinter einem
+Reverse-Proxy mit TLS.
 
 ---
 
-## Architektur
+## Erste Anmeldung
 
-```
-adr-rechner/
-├── app.py                  # Flask-App (Haupteinstieg)
-├── adr_rules.py            # ADR-1.1.3.6-Regelengine (testbar, ohne Flask)
-├── database.py             # SQLite-Datenbank & CRUD-Operationen
-├── befoerderungspapier.py  # PDF-Generierung (ReportLab)
-├── adr_import.py           # ADR-PDF-Parsing (PyMuPDF)
-├── auth.py                 # Anmeldung, Rollen (admin/user)
-├── audit.py                # Änderungsprotokoll (append-only)
-├── tests/                  # Unit-Tests der Regelengine
-├── data/
-│   └── adr_2025_seed.json  # Seed-Daten (rund 2.900 UN-Nummern)
-├── static/                 # Bootstrap 5 Styles + JavaScript
-├── templates/              # Jinja2-Templates
-├── Dockerfile              # amd64 (x86-64)
-├── docker-compose.yml
-└── requirements.txt
-```
+Der Erstzugang lautet **`admin` / `admin`** (oder die Werte aus
+`ADR_ADMIN_USER`/`ADR_ADMIN_PASSWORD`). Das ist bewusst fest und öffentlich:
+eine Erstinstallation braucht so **keine** vorab verteilten Zugangsdaten.
+Tragbar ist das nur, weil der Standard ausschließlich bis zur ersten Anmeldung
+gilt:
 
-| Schicht | Technologie |
-|---------|-------------|
-| Backend | Python 3.11, Flask, Gunicorn |
-| Datenbank | SQLite (WAL-Modus) |
-| PDF | ReportLab |
-| ADR-Parsing | PyMuPDF (fitz) |
-| Frontend | Bootstrap 5, Vanilla JS |
-| Deployment | Docker (**amd64 / x86-64**) |
+1. Das Konto entsteht mit dem Vermerk *Passwortwechsel erforderlich*.
+2. Die Anmeldung führt **direkt** auf die Seite zum Passwortwechsel.
+3. Jede andere Seite — auch jede Schnittstelle — antwortet bis dahin mit `403`.
+4. Das neue Passwort wird gegen die Richtlinie geprüft; `admin` selbst wird
+   abgelehnt.
 
-> **Hinweis zur Plattform:** Das offizielle Docker-Image wird für **amd64
-> (x86-64)** gebaut. Die frühere arm64-Variante (Raspberry Pi) wird nicht
-> mehr gepflegt — ein Self-Build ist über `docker build -t adr-rechner .`
-> auf der jeweiligen Architektur weiterhin möglich.
+> **Deshalb gilt:** Die Instanz darf in dieser Erstphase nicht aus einem Netz
+> erreichbar sein, in dem jemand anderes als Erster `admin`/`admin` eingeben
+> könnte. Danach gehört sie hinter TLS (`PREFER_SECURE_COOKIE=1`).
+> Ein vergessenes Administratorkonto lässt sich mit
+> `manage.py bootstrap-admin` auf den Erstzugang zurücksetzen.
 
 ---
 
-## Sicherheit & Konfiguration
+## Die Seiten der Anwendung
 
-Ab Version 2.0 ist die Anwendung **anmeldepflichtig**. Die Konfiguration
-erfolgt ausschließlich über Umgebungsvariablen — es gibt keine
-hartcodierten Geheimnisse mehr im Quellcode.
+| Seite | Route | Funktion |
+|---|---|---|
+| 1000-Punkte-Rechner | `/` | UN-Suche mit Variantenauswahl, Mengen und Verpackungen erfassen, Punktzahl und Freistellung live, Vorschau |
+| Beförderungspapier | `/befoerderungspapier/<id>` | Sendungsübersicht und PDF-Download |
+| Sendungsverlauf | `/sendungen` | alle gespeicherten Sendungen, Suche, erneut öffnen, löschen |
+| Kunden | `/kunden` | Empfänger verwalten, Excel-Import, Vorlage, Auskunft nach Art. 15 DSGVO |
+| Adressen | `/adressen` | Versandadressen (Absender), Standardadresse |
+| UN-Datenbank | `/un-datenbank` | 3.374 Varianten durchsuchen, filtern, bearbeiten (nur Administratoren) |
+| Daten & Verifikation | `/adr-import` | BAM-Datei importieren, ADR-PDF verifizieren (nur Administratoren) |
+| Benutzer | `/benutzer` | Konten, Rollen, Passwörter, Kontosperren (nur Administratoren) |
+| Einstellungen | `/einstellungen` | Mailserver dieser Instanz (nur Administratoren) |
 
-| Variable | Pflicht | Standard | Bedeutung |
-|----------|---------|----------|-----------|
-| `SECRET_KEY` | **ja** | zufällig | Sitzungsschlüssel. Ohne Wert werden nach jedem Neustart alle Anmeldungen ungültig. |
-| `AUTH_ENABLED` | nein | `1` | `0` schaltet die Anmeldung ab — **nur für lokale Entwicklung**. |
-| `ADR_ADMIN_USER` | nein | `admin` | Benutzername des ersten Administrators. |
-| `ADR_ADMIN_PASSWORD` | nein | `admin` | Startpasswort des **ersten** Administrators. Der Wechsel ist bei der ersten Anmeldung erzwungen. Ohne Wert gilt der dokumentierte Erstzugang `admin`/`admin`. |
-| `ADR_MAIL_*`, `ADR_SMTP_*` | — | — | **entfallen.** Der Mailversand wird in der Anwendung unter „Einstellungen" gepflegt (nur Administratoren), nicht über die Umgebung. |
-| `ADR_PASSWORD_MIN_LENGTH` | nein | `12` | Mindestlänge neuer Passwörter (kleiner als 8 wird nicht akzeptiert). |
-| `ADR_MAX_LOGIN_ATTEMPTS` | nein | `10` | Fehlversuche, nach denen ein Konto gesperrt wird. |
-| `ADR_LOGIN_LOCKOUT_MINUTES` | nein | `15` | Dauer der Sperre. |
-| `ADR_AUDIT_RETENTION_DAYS` | nein | `0` (aus) | Tage, nach denen Audit-Einträge beim Start gelöscht werden. Siehe `DSGVO.md`. |
-| `ADR_AUDIT_LOG_IP` | nein | `1` | `0` schreibt keine IP-Adressen ins Audit-Log (Datenminimierung). |
-| `ADR_DB_DIR` / `ADR_DB_PATH` | nein | `<App>/data` | Datenverzeichnis bzw. -datei — für **mehrere Instanzen auf einem Server**. |
-| `PREFER_SECURE_COOKIE` | nein | `0` | `1` setzt `Secure` am Session-Cookie — **bei HTTPS/Betrieb hinter Reverse-Proxy setzen**. |
-| `MAX_UPLOAD_MB` | nein | `50` | Obergrenze für PDF-/Excel-Uploads (Schutz vor Ressourcenerschöpfung). |
-| `ADR_HOST` / `ADR_PORT` | nein | `127.0.0.1` / `5050` | Nur für `python app.py`. `ADR_HOST=0.0.0.0` ist ohne Reverse-Proxy nicht zulässig. |
-
-### Passwortrichtlinie
-
-Bewusst **längenorientiert** statt komplexitätsorientiert: BSI (TR-02102-1)
-und NIST (SP 800-63B) empfehlen beide Länge als wirksames Kriterium und
-raten von erzwungenen Zeichenklassen ab — sie führen nachweislich zu
-Mustern wie `Sommer2026!`. Geprüft wird:
-
-* Mindestlänge 12 Zeichen
-* nicht in einer Sperrliste gängiger Leak-Passwörter
-* enthält nicht den Benutzernamen
-* mindestens 5 verschiedene Zeichen
-
-Gespeichert wird ausschließlich ein **scrypt-Hash** (`N=32768, r=8, p=1`).
-
-Vom Administrator vergebene oder zurückgesetzte Passwörter müssen bei der
-nächsten Anmeldung ersetzt werden — sonst kennt die Verwaltung dauerhaft
-ein fremdes Passwort und die Nutzung ist nicht personenbezogen.
-
-Bei 10 Fehlversuchen wird das Konto 15 Minuten gesperrt. Gezählt wird über
-den Benutzernamen, nicht die IP-Adresse — sonst würde ein Wechsel der
-Quell-IP das Limit umgehen.
-
-### Erstzugang: `admin` / `admin` — und warum das vertretbar ist
-
-Bei der ersten Inbetriebnahme legt die Anwendung einen Administrator
-`admin` mit dem Passwort `admin` an. Dieses Passwort ist bewusst fest und
-öffentlich dokumentiert: eine Erstinstallation braucht damit **keine**
-vorherige Zugangsdatenverteilung, und es gibt keine Passwortdatei, die
-gelesen, geschützt und nach der ersten Anmeldung gelöscht werden müsste.
-
-Tragbar ist das nur, weil der Standard ausschließlich bis zur ersten
-Anmeldung gilt:
-
-* Das Konto entsteht mit `must_change_password = 1`.
-* Die Anmeldung führt **direkt** auf die Seite zum Passwortwechsel.
-* Jede andere Route — auch jede API — antwortet bis dahin mit `403`
-  (`{"must_change_password": true}`). Es gibt keinen Weg daran vorbei.
-* Das neue Passwort wird gegen die Richtlinie geprüft; `admin` selbst wird
-  dabei abgelehnt.
-* Bis der Wechsel erfolgt ist, steht in der Benutzerverwaltung der Zustand
-  **„Passwortwechsel offen"**.
-
-Daraus folgen zwei Betriebsbedingungen:
-
-1. Die Instanz darf in der Erstphase nicht aus einem Netz erreichbar sein,
-   in dem jemand anderes als Erster `admin`/`admin` eingeben könnte. Für
-   alles darüber hinaus gehört sie hinter TLS (`PREFER_SECURE_COOKIE=1`,
-   Reverse-Proxy).
-2. Wer den Erstzugang vorbelegen will, setzt `ADR_ADMIN_PASSWORD` beim
-   ersten Start. Auch dieser Wert wird beim ersten Anmelden ersetzt.
-
-Der Erstzugang wird **nur in eine leere Benutzertabelle** geschrieben. Ein
-gelöschter oder umbenannter `admin` taucht nicht bei jedem Neustart wieder
-auf — dafür gibt es `manage.py bootstrap-admin`.
-
-### Startpasswort: vorgeben oder erzeugen — Mailserver ist optional
-
-Beim Anlegen eines Kontos gibt es zwei Wege, beide enden gleich: die Person
-**muss** das Startpasswort bei der ersten Anmeldung ersetzen und kann bis
-dahin nichts anderes tun.
-
-* **Vorgeben:** Der Administrator trägt ein Startpasswort ein (mindestens
-  12 Zeichen, darf den Benutzernamen nicht enthalten) und übergibt es
-  persönlich. Die Anwendung erfährt es nicht als „neu" und zeigt es nicht an.
-* **Erzeugen lassen:** Das Feld bleibt leer. Die Anwendung erzeugt ein
-  Passwort und zeigt es **genau einmal** an — im Bildschirm oder, wenn ein
-  Versand eingerichtet ist, per E-Mail an die hinterlegte Adresse.
-
-**Ein Mailserver ist damit optional.** Ohne hinterlegte Zugangsdaten läuft
-alles wie beschrieben; die Benutzerverwaltung weist lediglich darauf hin,
-dass Anfangspasswörter persönlich übergeben werden.
-
-Die Zugangsdaten des Mailservers gehören **nicht** in die
-Container-Konfiguration, sondern werden von einem Administrator in der
-Anwendung unter **Einstellungen** (Menü oben rechts) gepflegt: Server, Port,
-STARTTLS, Postfach, Passwort, Absenderadresse, Name der Anwendung und die
-Adresse der Anwendung für den Anmeldelink. Sie liegen in der Tabelle
-`settings` dieser Instanz, wirken ohne Neustart, und ein Postfachwechsel
-braucht keinen neuen Container. Der Knopf „Verbindung testen" meldet sich am
-Mailserver an, **ohne** eine Nachricht zu senden. Das Postfachpasswort wird
-nie angezeigt und nie protokolliert; es verlässt die Anwendung nicht.
-
-Ein *erzeugtes* Passwort geht an die hinterlegte Adresse; ein vom
-Administrator *vorgegebenes* wird nie per E-Mail verschickt.
-
-Die E-Mail-Adresse ist ebenfalls optional und nachträglich korrigierbar
-(Umschlag-Symbol in der Benutzerverwaltung) — eine falsch geschriebene
-Adresse würde den Versand sonst dauerhaft ins Leere laufen lassen. Ein
-Zustellfehler lässt das Konto bestehen und wird als technischer Grund
-gemeldet. **Niemals im Log** — weder das Passwort noch der
-Nachrichteninhalt.
-
-### Rollen
-
-| Funktion | `admin` | `user` |
-|---|:---:|:---:|
-| Berechnung, Beförderungspapiere | ✓ | ✓ |
-| Kunden und Adressen anlegen und ändern | ✓ | ✓ |
-| **Kunden und Adressen löschen** | ✓ | — |
-| **Datenauskunft nach Art. 15 DSGVO** | ✓ | — |
-| Benutzerverwaltung | ✓ | — |
-| Audit-Log einsehen | ✓ | — |
-| UN-Datenbank bearbeiten, ADR-Import, Verifikation | ✓ | — |
-| Sendungen löschen | ✓ | — |
-
-Löschvorgänge und die Auskunft nach Art. 15 sind auf Administratoren
-beschränkt: beides betrifft personenbezogene Daten unmittelbar und ist
-nicht umkehrbar.
-
-### Benutzerverwaltung
-
-Administratoren legen unter **Benutzerverwaltung** (Menü oben rechts) die
-Konten an. Angegeben werden **Benutzername, E-Mail-Adresse und Rolle**; ein
-Anfangspasswort ist optional. Bleibt das Feld leer, erzeugt die Anwendung
-eines und sendet es per E-Mail an die Person. Jedes so vergebene Passwort
-muss bei der ersten Anmeldung ersetzt werden.
-
-Zwei Vorgänge sind bewusst getrennt:
-
-* **Deaktivieren** sperrt die Anmeldung sofort; das Konto und seine
-  Zuordnung im Audit-Log bleiben erhalten. Der Regelfall bei Austritt,
-  Krankheit oder Umzug — und umkehrbar.
-* **Löschen** entfernt den Datensatz endgültig (Fehlanlagen, Testkonten,
-  Löschbegehren nach Art. 17 DSGVO). Ein Audit-Eintrag hält fest, wer wann
-  welches Konto gelöscht hat; die Fehlversuche des Kontos werden
-  mitentfernt, damit der Name wieder frei verwendbar ist. Zur Bestätigung
-  muss der Benutzername eingetippt werden.
-
-Der letzte aktive Administrator kann weder sich selbst herabstufen,
-deaktivieren oder löschen noch von einem anderen Konto gelöscht werden.
-
-Ein vergessenes Administratorkonto lässt sich nur auf dem Server zurücksetzen:
-
-```bash
-docker exec -it adr-rechner python manage.py list-users
-docker exec -it adr-rechner python manage.py reset-password admin
-docker exec -it adr-rechner python manage.py bootstrap-admin   # Erstzugang setzen
-docker exec -it adr-rechner python manage.py delete-user name  # endgültig löschen
-docker exec -it adr-rechner python manage.py unlock admin      # Sperre aufheben
-docker exec -it adr-rechner python manage.py check             # Bestand prüfen
-```
-
-`bootstrap-admin` ist der einzige Weg, der die Passwortrichtlinie umgeht —
-er setzt `admin`/`admin` (bzw. `ADR_ADMIN_PASSWORD`) und erzwingt den
-Wechsel bei der nächsten Anmeldung. Ohne ihn wäre eine Instanz, deren
-Administratorkonto gelöscht wurde, nicht mehr erreichbar.
-
-### Eine Instanz je Niederlassung
-
-Die Anwendung hat **keine Mandantentrennung**: alle angemeldeten Konten
-sehen alle Kunden. Für einen Betrieb mit mehreren Niederlassungen ist
-deshalb **je Standort eine eigene Instanz** vorgesehen — getrennte
-Datenbestände, getrennte Zugänge, kein gegenseitiger Einblick.
-
-```bash
-# Niederlassung München
-docker run -d --name adr-muenchen \
-  -p 127.0.0.1:5051:5050 \
-  -v adr_muenchen_data:/app/data \
-  -v adr_muenchen_exports:/app/exports \
-  -e SECRET_KEY="$(openssl rand -hex 32)" \
-  -e ADR_ADMIN_PASSWORD="<starkes-passwort>" \
-  -e ADR_AUDIT_RETENTION_DAYS=3650 \
-  kissberg/adr-rechner:latest
-
-# Niederlassung Hamburg — eigener Port, eigenes Volume, eigenes SECRET_KEY
-docker run -d --name adr-hamburg \
-  -p 127.0.0.1:5052:5050 \
-  -v adr_hamburg_data:/app/data \
-  -v adr_hamburg_exports:/app/exports \
-  -e SECRET_KEY="$(openssl rand -hex 32)" \
-  -e ADR_ADMIN_PASSWORD="<anderes-starkes-passwort>" \
-  kissberg/adr-rechner:latest
-```
-
-Jede Instanz hat ihre eigene Datenbank und ihr eigenes `SECRET_KEY` —
-nie dasselbe verwenden, sonst ist eine Sitzung in beiden gültig.
-
-Die UN-Stammdaten (Tabelle A) sind in jeder Instanz identisch und werden
-aus derselben BAM-Datei befüllt; sie müssen bei einem ADR-Versionswechsel
-in jeder Instanz einmal aktualisiert werden.
-
-### Empfohlener Produktivbetrieb
-
-```bash
-docker run -d \
-  --name adr-rechner \
-  -p 127.0.0.1:5050:5050 \
-  -v adr_data:/app/data \
-  -v adr_exports:/app/exports \
-  -e SECRET_KEY="$(openssl rand -hex 32)" \
-  -e PREFER_SECURE_COOKIE=1 \
-  -e ADR_AUDIT_RETENTION_DAYS=3650 \
-  kissberg/adr-rechner:latest
-```
-
-Danach einen Reverse-Proxy (nginx, Traefik, Caddy) mit TLS vorschalten und
-den Container **nicht** direkt exponieren. Der Healthcheck ist unter
-`/healthz` ohne Anmeldung erreichbar.
-
-Das Passwort selbst wird **nicht** in die Kommandozeile geschrieben (sie
-erscheint sonst in der Prozessliste und in der Shell-Historie). Stattdessen
-eine Env-Datei mit `chmod 600` verwenden oder den Wert beim ersten Start
-erzeugen lassen.
-
-### Datenschutz / Nachweispflicht
-
-- Alle Änderungen an Stammdaten, Sendungen und ADR-Importen werden im
-  **Audit-Log** protokolliert (Benutzer, Zeit, Aktion, geänderte Felder,
-  optional IP). Das Log ist append-only und nur für Administratoren unter
-  `/api/audit-log` abrufbar.
-- Bei Kunden- und Adressänderungen werden **nur die Feldnamen** festgehalten,
-  nicht die Werte. Sonst entstünde im Log eine zweite Kopie der
-  Kundenstammdaten, die eine Löschung nach Art. 17 DSGVO überleben würde.
-- Kundendaten sind personenbezogene Daten im Sinne der DSGVO. Der
-  Zugriffsschutz ist daher keine Komfortfunktion, sondern eine Anforderung
-  aus Art. 32 DSGVO.
-- Das Log enthält Benutzernamen und — sofern aktiviert — IP-Adressen.
-  Ohne Aufbewahrungsfrist wächst es unbegrenzt (Art. 5 Abs. 1 lit. e).
-  Über `ADR_AUDIT_RETENTION_DAYS` oder `manage.py purge-audit` aufräumen.
-- Zugehörige Beförderungspapier-PDFs werden beim Löschen einer Sendung
-  mitgelöscht — sie enthalten die vollständige Empfängeranschrift.
-- Für eine GoBD-konforme Archivierung der Beförderungspapiere ist zusätzlich
-  ein WORM-Speicher bzw. eine Signatur/Timestamping-Lösung erforderlich
-  (siehe `PLAN.md`).
-
-**Die vollständige Datenschutz-Dokumentation** — Verzeichnis nach Art. 30,
-Rechtsgrundlagen, Löschkonzept, TOM und die Umsetzung der Betroffenenrechte —
-steht in **[`DSGVO.md`](DSGVO.md)**.
+Ein Berechnungsvorgang ist zunächst eine **Vorschau** und legt keine Sendung
+an; erst *Berechnung durchführen & Beförderungspapier erstellen* speichert.
 
 ---
 
-## ADR 1.1.3.6 — Die 1000-Punkte-Regel
+## ADR 1.1.3.6 — die 1000-Punkte-Regel
 
-Nach ADR Unterabschnitt 1.1.3.6 sind Transporte von Gefahrgütern
-**freigestellt**, wenn **alle** Voraussetzungen erfüllt sind. Die Punktzahl
-ist nur *eine* davon.
-
-**Formel:** ∑(Menge × Faktor) für alle Gefahrgüter einer Sendung
-
-### Die vier kumulativen Voraussetzungen
+**Formel:** ∑(Menge je Verpackung × Anzahl Verpackungen × Faktor) über alle
+Gefahrgüter einer Beförderung. Bei ≤ 1000 Punkten ist die Beförderung von einem
+Teil der ADR-Vorschriften freigestellt — **sofern auch alle übrigen
+Voraussetzungen erfüllt sind**:
 
 | Nr. | Voraussetzung | Rechtsgrundlage |
-|-----|---------------|-----------------|
+|---|---|---|
 | 1 | Beförderung als **Stückgut** (in Versandstücken). Tank und Schüttgut sind nie freigestellt. | 1.1.3.6.2 |
 | 2 | Kein Gut hat die **Beförderungskategorie 0** — diese ist niemals freigestellt. | 1.1.3.6.3 |
 | 3 | Je Gut wird die **Höchstmenge je Beförderungseinheit** eingehalten. | 1.1.3.6.3 |
 | 4 | Die **Gesamtpunktzahl** überschreitet 1000 nicht. | 1.1.3.6.4 |
 
-> **Fail-Safe-Prinzip:** Lässt sich eine Voraussetzung nicht zweifelsfrei
-> prüfen (unbekannte Beförderungskategorie, nicht gewählte Verpackungsgruppe),
-> wird **nicht** freigestellt. Eine zu Unrecht erteilte Freistellung ist ein
-> Rechtsverstoß; eine zu Unrecht verweigerte führt lediglich zur (legalen)
-> Vollanwendung des ADR.
-
-### Beförderungskategorien
-
 | Kategorie | Faktor | Höchstmenge je Beförderungseinheit |
-|-----------|--------|-------------------------------------|
-| 0 | 0 | 0 (niemals freigestellt) |
+|---|---|---|
+| 0 | – | 0 (niemals freigestellt) |
 | 1 | 50 | 20 kg / L |
 | 2 | 3 | 333 kg / L |
 | 3 | 1 | 1000 kg / L |
-| 4 | 0 | unbegrenzt |
+| 4 | – | unbegrenzt (wird nicht gezählt) |
 
-> **Fussnote a) zu 1.1.3.6.3:** Für die UN-Nummern 0081, 0082, 0084, 0241,
-> 0331, 0332, 0482, 1005 und 1017 gilt abweichend: Faktor **20**, Höchstmenge
+> **Fußnote a) zu 1.1.3.6.3:** Für die UN-Nummern 0081, 0082, 0084, 0241, 0331,
+> 0332, 0482, 1005 und 1017 gilt abweichend Faktor **20** und Höchstmenge
 > **50 kg**.
 
-Ergebnis ≤ 1000 Punkte **und** keine andere Voraussetzung verletzt
-→ **Freistellung**.
+> **Fail-Safe:** Lässt sich eine Voraussetzung nicht zweifelsfrei prüfen
+> (unbekannte Kategorie, nicht gewählte Verpackungsgruppe), wird **nicht**
+> freigestellt. Eine zu Unrecht erteilte Freistellung ist ein Rechtsverstoß,
+> eine zu Unrecht verweigerte nur die (legale) Vollanwendung des ADR.
+
+**Achtung, häufige Fehlannahme:** Die Höchstmenge gilt **je Gut**, die
+Punktzahl für die **gesamte Beförderung**. Es gibt **keine** pauschalen
+Klassenausschlüsse (Klasse 1, 6.2 oder 7) — die Entscheidung hängt allein an
+der Beförderungskategorie aus Tabelle A, Spalte (15).
 
 ---
 
-## Lizenz
+## Betrieb und Administration
 
-MIT License — siehe [LICENSE](LICENSE).
+### Umgebungsvariablen
 
-**⚠️ Wichtiger Haftungsausschluss:** Die enthaltenen ADR-Daten dienen
-**ausschließlich Referenzzwecken**. Vor rechtsverbindlicher Nutzung sind
-alle Daten zwingend mit den amtlichen ADR-Vorschriften (ECE/TRANS/300)
-abzugleichen. Der Autor übernimmt keinerlei Gewähr.
+| Variable | Pflicht | Standard | Bedeutung |
+|---|:---:|---|---|
+| `SECRET_KEY` | empfohlen | zufällig | Sitzungsschlüssel. Ohne festen Wert enden nach jedem Neustart alle Anmeldungen. |
+| `AUTH_ENABLED` | nein | `1` | `0` schaltet die Anmeldung ab — nur lokale Entwicklung, **nie** produktiv. |
+| `ADR_ADMIN_USER` | nein | `admin` | Benutzername des ersten Administrators. |
+| `ADR_ADMIN_PASSWORD` | nein | `admin` | Startpasswort des ersten Administrators; der Wechsel ist immer erzwungen. |
+| `ADR_PASSWORD_MIN_LENGTH` | nein | `12` | Mindestlänge neuer Passwörter (unter 8 wird nicht akzeptiert). |
+| `ADR_MAX_LOGIN_ATTEMPTS` | nein | `10` | Fehlversuche bis zur Kontosperre. |
+| `ADR_LOGIN_LOCKOUT_MINUTES` | nein | `15` | Dauer der Sperre. |
+| `ADR_AUDIT_RETENTION_DAYS` | nein | `0` (aus) | Aufbewahrungsfrist des Audit-Logs in Tagen — siehe `DSGVO.md`. |
+| `ADR_AUDIT_LOG_IP` | nein | `1` | `0` schreibt keine IP-Adressen ins Audit-Log. |
+| `ADR_DB_DIR` / `ADR_DB_PATH` | nein | `/app/data` | Datenverzeichnis/-datei — für **mehrere Instanzen** auf einem Server. |
+| `PREFER_SECURE_COOKIE` | nein | `0` | `1` setzt `Secure` am Sitzungscookie. **Nur hinter HTTPS** — über http scheitert die Anmeldung sonst reproduzierbar. |
+| `MAX_UPLOAD_MB` | nein | `50` | Obergrenze für PDF-/Excel-Uploads. |
+| `ADR_HOST` / `ADR_PORT` | nein | `127.0.0.1`/`5050` | Nur für `python app.py`. |
+| `ADR_SMTP_*`, `ADR_MAIL_*` | — | — | **entfallen seit 4.2.** Mailserver unter *Einstellungen* pflegen. |
+
+### Rollen
+
+| Funktion | Administrator | Benutzer |
+|---|:---:|:---:|
+| Berechnen, Beförderungspapiere, Kunden und Adressen pflegen | ✓ | ✓ |
+| Kunden/Adressen löschen, Auskunft nach Art. 15 DSGVO | ✓ | — |
+| Benutzerverwaltung, Einstellungen, Audit-Log | ✓ | — |
+| UN-Datenbank bearbeiten, Datenimport, Verifikation | ✓ | — |
+| Sendungen löschen | ✓ | — |
+
+### Kommandozeile (im Container)
+
+```bash
+docker exec -it adr-rechner python manage.py list-users
+docker exec -it adr-rechner python manage.py create-user mueller --email mueller@firma.de --send-email
+docker exec -it adr-rechner python manage.py reset-password mueller
+docker exec -it adr-rechner python manage.py unlock mueller
+docker exec -it adr-rechner python manage.py bootstrap-admin   # Notfall: Erstzugang setzen
+docker exec -it adr-rechner python manage.py delete-user mueller
+docker exec -it adr-rechner python manage.py purge-audit --days 3650
+docker exec -it adr-rechner python manage.py check
+```
+
+### Mehrere Niederlassungen auf einem Server
+
+Die Anwendung hat **keine Mandantentrennung** — jedes angemeldete Konto sieht
+alle Kunden. Für getrennte Zuständigkeiten je Standort deshalb je Standort eine
+eigene Instanz betreiben: eigener Port, eigenes Volume, **eigenes
+`SECRET_KEY`** (nie dasselbe verwenden, sonst gilt eine Sitzung in beiden).
+
+```bash
+docker run -d --name adr-muenchen -p 127.0.0.1:5051:5050 \
+  -v adr_muenchen_data:/app/data -v adr_muenchen_exports:/app/exports \
+  -e SECRET_KEY="$(openssl rand -hex 32)" -e TZ=Europe/Berlin \
+  kissberg/adr-rechner:latest
+```
+
+### Sicherung und Update
+
+```bash
+# Sicherung (vor jedem Update)
+docker run --rm -v adr_data:/data:ro -v "$HOME/backup":/backup alpine \
+  tar czf /backup/adr_data-$(date +%Y%m%d).tar.gz -C /data .
+
+# Update
+docker pull kissberg/adr-rechner:latest
+docker kill adr-rechner && docker rm adr-rechner
+docker run -d --name adr-rechner --restart unless-stopped \
+  -p 127.0.0.1:5050:5050 -v adr_data:/app/data -v adr_exports:/app/exports \
+  -e SECRET_KEY="$(cat ~/adr_secret.key)" -e TZ=Europe/Berlin \
+  kissberg/adr-rechner:latest
+curl -s http://127.0.0.1:5050/healthz
+# {"status":"ok","un_numbers":3374,"version":"4.2.0"}
+```
+
+Datenbankänderungen laufen beim Start automatisch (`CREATE TABLE IF NOT EXISTS`
+und Spaltenergänzungen) — es gibt keinen separaten Migrationsschritt. Entscheidend
+ist allein, dass das Volume `/app/data` erhalten bleibt.
 
 ---
 
-## Autor
+## Datenbasis und Lizenz der Daten
 
-**Yun Zhu** — [GitHub: Kissberg](https://github.com/Kissberg)
+Die UN-Stammdaten stammen aus der **Datenbank GEFAHRGUT (DGG)** der
+Bundesanstalt für Materialforschung und -prüfung (BAM) und stehen unter der
+*Datenlizenz Deutschland – Namensnennung – Version 2.0* (`dl-de/by-2-0`). Die
+Quellenangabe ist **Lizenzpflicht** und in der Anwendung hinterlegt:
+
+```
+Source: Bundesanstalt für Materialforschung und -prüfung (BAM) –
+Datenbank GEFAHRGUT – Data licence Germany – attribution – Version 2.0
+```
+
+| Kennzahl | Wert |
+|---|---|
+| UN-Varianten | 3.374 |
+| UN-Nummern | 2.347 |
+| davon mehrvariantig (mehrere Verpackungsgruppen) | 578 |
+| ohne Beförderungskategorie (nicht freistellungsfähig, Fail-Safe) | 55 |
+| Abgleich mit ADR-PDF (ADR 2025) | 2.346 von 2.347 = 99,96 % |
+
+> **Zwei Einschränkungen der BAM-Lizenz:** Die BAM untersagt gemäß § 44b Abs. 3
+> UrhG die Nutzung der Daten für **Text- und Data-Mining** — die Verwendung als
+> Nachschlagetabelle in dieser Anwendung ist zulässig, das Training von Modellen
+> benötigt die schriftliche Zustimmung der BAM. Und die BAM übernimmt **keine
+> Gewähr** für Richtigkeit und Vollständigkeit.
+
+**Neue ADR-Ausgabe einspielen:** neue BAM-Datei unter *Daten & Verifikation*
+importieren, ADR-PDF beider Bände zur Verifikation hochladen (Band 1 enthält
+1.1.3.6, Band 2 enthält 5.4.1.1 — fehlt ein Abschnitt, wird das ausdrücklich
+gemeldet) und die Prüfsummen dokumentieren. Ein eigener PDF-Parser steht als
+`adr_import.py` bereit, schreibt aber seit 3.0 **nicht** mehr in die Datenbank.
 
 ---
 
-## Docker Hub
+## Sicherheit und Datenschutz
 
-Docker Image: [`kissberg/adr-rechner`](https://hub.docker.com/r/kissberg/adr-rechner)
+* **Jede** Route außer Anmeldung, Statik und `/healthz` verlangt eine Anmeldung;
+  Schnittstellen antworten mit `401` statt mit einer Umleitung.
+* Passwörter werden ausschließlich als **scrypt-Hash** gespeichert, nie im
+  Klartext und nie im Protokoll. Die Richtlinie prüft Länge (≥ 12 Zeichen),
+  Sperrliste, Benutzernamen und Zeichenvielfalt.
+* **Audit-Log** (append-only): Benutzer, Zeit, Aktion, geänderte Feldnamen,
+  optional IP. Aufbewahrungsfrist konfigurierbar, damit das Log nicht unbegrenzt
+  wächst (Art. 5 Abs. 1 lit. e DSGVO).
+* **Rechte der Betroffenen:** Auskunft und Übertragbarkeit als JSON je Kunde
+  (`/api/kunden/<id>/export`), Löschung über Kunden-/Sendungslöschung;
+  beim Löschen einer Sendung wird das zugehörige PDF mitgelöscht.
+* Container läuft als **unprivilegierter Benutzer** (uid 10001), mit
+  Upload-Obergrenze und Healthcheck.
+* Vollständige Dokumentation: **[DSGVO.md](DSGVO.md)** — Verzeichnis nach
+  Art. 30, Rechtsgrundlagen, Löschkonzept, technische und organisatorische
+  Maßnahmen.
+
+> **Offener Punkt für eine GoBD-konforme Archivierung** der
+> Beförderungspapiere: dafür ist zusätzlich WORM-Speicher oder
+> Signatur/Timestamping nötig (siehe [PLAN.md](PLAN.md)).
+
+---
+
+## Dokumentation
+
+* **[Installations- und Bedienungsanleitung (PDF, Version 4.2)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.2.pdf)**
+  — 36 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
+  E-Mail-Einstellungen, Rechner, Beförderungspapier, Datenschutz, Betrieb.
+* [CHANGELOG.md](CHANGELOG.md) — Änderungen je Version mit Begründung
+* [DSGVO.md](DSGVO.md) — Datenschutz-Dokumentation
+* [PLAN.md](PLAN.md) — geplante Ausbaustufen
+* Abschnittstexte des ADR im Wortlaut: in der Anwendung unter *Daten &
+  Verifikation* (1.1.3.6 und 5.4.1.1, mit Prüfsumme)
+
+---
+
+## Entwicklung
+
+```
+adr-rechner/
+├── app.py                  # Flask-Anwendung: Seiten und Schnittstellen
+├── adr_rules.py            # Regelengine zu ADR 1.1.3.6 (ohne Flask, testbar)
+├── database.py             # SQLite-Schema, Seed aus der BAM-Datei
+├── bam_import.py           # Parser der BAM-Datenbank GEFAHRGUT
+├── befoerderungspapier.py  # PDF-Erzeugung nach ADR 5.4.1 (ReportLab)
+├── adr_import.py           # ADR-PDF-Parser (PyMuPDF) — nur Verifikation
+├── auth.py                 # Anmeldung, Rollen, Benutzer, Passwortrichtlinie
+├── settings_store.py       # Einstellungen dieser Instanz
+├── mailer.py               # Mailversand (Standardbibliothek)
+├── audit.py                # Änderungsprotokoll (append-only)
+├── manage.py               # Kommandozeile: Benutzer, Sperren, Audit
+├── data/bam/               # BAM-Datei (ADR 2025) + Lizenzhinweis
+├── docs/                   # Anleitung (PDF), Screenshots
+├── static/ templates/      # Bootstrap 5, Vanilla JS, Jinja2
+├── tests/                  # 160 Tests (pytest)
+├── DSGVO.md  PLAN.md  CHANGELOG.md
+├── Dockerfile              # python:3.11-slim + gunicorn, unprivilegiert
+└── docker-compose.yml
+```
+
+| Schicht | Technologie |
+|---|---|
+| Backend | Python 3.11, Flask, gunicorn (2 Worker × 2 Threads) |
+| Datenbank | SQLite (WAL-Modus) |
+| PDF | ReportLab |
+| ADR-PDF-Auswertung | PyMuPDF |
+| Oberfläche | Bootstrap 5, Vanilla JavaScript (kein Build-Schritt) |
+| CI | GitHub Actions, Python 3.11 und 3.12 |
+
+```bash
+python3 -m venv /tmp/adrv && /tmp/adrv/bin/pip install -r requirements-dev.txt
+/tmp/adrv/bin/python -m pytest tests/ -q
+# 160 passed
+```
+
+Abhängigkeiten sind exakt gepinnt (`==`), damit Builds reproduzierbar bleiben;
+vor einem Release `pip-audit` laufen lassen.
+
+---
+
+## Lizenz und Haftung
+
+**MIT License** — siehe [LICENSE](LICENSE).
+
+> ⚠️ **Haftungsausschluss:** Die enthaltenen ADR-Daten dienen ausschließlich
+> Referenzzwecken. Vor rechtsverbindlicher Nutzung sind alle Daten zwingend mit
+> den amtlichen ADR-Vorschriften (ECE/TRANS/300) abzugleichen. Die Anwendung
+> ersetzt **weder eine Rechtsberatung noch die Prüfung durch einen
+> Gefahrgutbeauftragten**. Der Autor übernimmt keinerlei Gewähr.
+
+**Autor:** Yun Zhu — [GitHub: Kissberg](https://github.com/Kissberg)
+
+**Docker Hub:** [`kissberg/adr-rechner`](https://hub.docker.com/r/kissberg/adr-rechner)
 
 ```bash
 docker pull kissberg/adr-rechner:latest

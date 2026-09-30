@@ -1,0 +1,212 @@
+# Änderungsverlauf
+
+Alle nennenswerten Änderungen dieses Projekts. Die Versionierung folgt
+`MAJOR.MINOR.PATCH`; jeder Eintrag nennt die Beweggründe, nicht nur die
+Änderung.
+
+- **Aktuelle Version:** 4.2.0 (Datenstand ADR 2025)
+- **Datenquelle:** Datenbank GEFAHRGUT der BAM (`dl-de/by-2-0`)
+
+---
+
+## 4.2.0 — Mailserver-Zugangsdaten in der Anwendung
+
+**Anlass:** Die Zugangsdaten des Mailservers lagen in Umgebungsvariablen und
+damit in der Container-Konfiguration. Für einen Postfachwechsel war ein neuer
+Container nötig, und eine Weitergabe des Images hätte fremde Zugangsdaten
+mitgeführt.
+
+### Neu
+
+- Tabelle `settings` (`key`, `value`, `updated_at`, `updated_by`); wird über
+  `CREATE TABLE IF NOT EXISTS` angelegt — kein Migrationsschritt nötig.
+- Modul `settings_store.py` als einzige Lesestelle; `mailer.py` liest die
+  Konfiguration **ausschließlich** von dort.
+- Seite **Einstellungen** (`/einstellungen`, nur Administratoren) mit den
+  Feldern Mailserver, Port, STARTTLS, Benutzer/Postfach, Passwort,
+  Absenderadresse, Adresse der Anwendung, Name in Betreff und Signatur.
+- Schnittstellen `GET|PUT /api/settings/mail` und
+  `POST /api/settings/mail/test` (Anmeldung am Mailserver **ohne** Versand
+  einer Nachricht).
+
+### Geändert
+
+- Die Umgebungsvariablen `ADR_SMTP_*` und `ADR_MAIL_*` **entfallen ersatzlos**.
+- Änderungen wirken sofort, ohne Neustart des Containers.
+
+### Sicherheit
+
+- `mail_public_settings()` liefert das Postfachpasswort **nie** — nur
+  `password_set: true/false`. Ein leer übergebenes Passwort lässt das
+  gespeicherte bestehen, `clear_password: true` leert es.
+- Eingabeprüfung: Port ganzzahlig 1–65535, `mail_from` gegen ein
+  Adressmuster, `mail_app_url` muss mit `http(s)://` beginnen.
+- Ohne vollständige Konfiguration oder ohne Empfängeradresse wird **gar nicht**
+  versucht zuzustellen; die Oberfläche zeigt das Passwort dann einmalig an.
+
+### Tests
+
+- 160 Tests (vorher 136): `tests/test_settings.py` (Zugriffsschutz,
+  Passwort verlässt die Anwendung nicht, Korrektur und Leeren,
+  Eingabeprüfung) und `tests/test_mailer.py` auf Datenbank-Konfiguration
+  umgestellt.
+
+---
+
+## 4.1.0 — Erstzugang, Anfangspasswort per E-Mail, Löschen
+
+**Anlass:** Bei der Auslieferung an einen Betrieb mit mehreren Standorten war
+unklar, wie der erste Administrator sein Startpasswort erhält, ohne dass ein
+Passwort vorab verteilt werden muss. Außerdem fehlte eine Möglichkeit, Konten
+wirklich zu löschen (Fehlanlagen, Art. 17 DSGVO).
+
+### Neu
+
+- **Erstzugang `admin` / `admin`** (bzw. `ADR_ADMIN_USER`/`ADR_ADMIN_PASSWORD`).
+  Das Konto entsteht immer mit `must_change_password = 1`.
+- Anmeldung führt direkt auf `/auth/passwort-aendern`; **jede** andere Route —
+  auch jede Schnittstelle — antwortet `403 {"must_change_password": true}`.
+- Spalte `users.email` (optional, Migration in `V4_USER_COLUMNS`).
+- Modul `mailer.py` (nur Standardbibliothek): ein **erzeugtes**
+  Anfangspasswort geht per E-Mail an die hinterlegte Adresse.
+- `manage.py bootstrap-admin` (Erstzugang setzen, einziger Weg an der
+  Passwortrichtlinie vorbei) und `manage.py delete-user`.
+- Startpasswort beim Anlegen optional **vorgeben** (richtliniengeprüft) oder
+  leer lassen und **erzeugen** lassen — in beiden Fällen ist der Wechsel beim
+  ersten Anmelden erzwungen.
+
+### Geändert
+
+- **Deaktivieren ≠ Löschen:** `PUT /api/users/<id> {"active": false}` sperrt
+  umkehrbar, `DELETE /api/users/<id>` löscht die Zeile **hart** (samt
+  Fehlversuchen, damit der Name wieder frei ist). Geschützt bleiben das eigene
+  Konto und der letzte aktive Administrator.
+- E-Mail-Adresse ist nachträglich korrigierbar **und leerbar**.
+- Entfallen: Passwortdatei `.admin_password`, `ADR_REQUIRE_ADMIN_PASSWORD`,
+  `ADR_ADMIN_PASSWORD_FILE`.
+
+### Tests
+
+- 136 Tests (vorher 103): `tests/test_mailer.py` (Fake-SMTP),
+  `test_auth_admin.py` neu geschrieben, `test_user_management.py` erweitert.
+
+---
+
+## 4.0.0 — Benutzerverwaltung, Passwortrichtlinie, DSGVO-Lücken
+
+**Anlass:** Vor der Auslieferung an ein Unternehmen mit mehreren Niederlassungen
+ergab eine Codeprüfung drei Blocker: es gab keine Möglichkeit, weitere Konten
+anzulegen; ein vergessenes Administratorkonto war nicht zurücksetzbar; und das
+Audit-Log schrieb bei Kundenänderungen die vollständigen Werte mit, wodurch eine
+Löschung nach Art. 17 DSGVO ins Leere lief.
+
+### Neu
+
+- Seite **Benutzerverwaltung** und Schnittstellen `/api/users` (anlegen, Rolle
+  ändern, deaktivieren, Passwort zurücksetzen) — nur Administratoren.
+- **Passwortrichtlinie**: Mindestlänge 12, Sperrliste, kein Benutzername im
+  Passwort, mindestens 5 verschiedene Zeichen; Speicherung als scrypt-Hash.
+- **Kontosperre** nach 10 Fehlversuchen für 15 Minuten, gezählt über den
+  Benutzernamen (nicht über die IP).
+- **Audit-Log** (append-only) mit Aufbewahrungsfrist
+  (`ADR_AUDIT_RETENTION_DAYS`) und abschaltbarer IP-Protokollierung
+  (`ADR_AUDIT_LOG_IP`).
+- **Datenauskunft nach Art. 15/20 DSGVO** als JSON je Kunde.
+- Dokumentation `DSGVO.md` (Verzeichnis nach Art. 30, Löschkonzept, TOM).
+
+### Behoben
+
+- Audit-Log speichert bei Kunden- und Adressänderungen nur noch die
+  **Feldnamen**, nicht die Werte.
+- Beim Löschen einer Sendung wird die zugehörige Beförderungspapier-PDF
+  mitgelöscht.
+
+### Tests
+
+- 103 Tests (vorher 63): `test_auth_admin.py`, `test_user_management.py`,
+  `test_dsgvo.py`.
+
+---
+
+## 3.0.0 — Amtliche BAM-Daten statt PDF-Parsing
+
+**Anlass:** Tabelle A ist eine 20-spaltige Tabelle über zwei gegenüberliegende
+Seiten. Beim Auslesen als Text gehen die Spaltengrenzen verloren; die
+Beförderungskategorie wurde geschätzt und im Zweifel **Kategorie 3**
+angenommen. Bei einer Freistellungsentscheidung nach 1.1.3.6 ist das ein
+untragbares Risiko.
+
+### Geändert
+
+- Datenquelle ist die amtliche **Datenbank GEFAHRGUT** der BAM
+  (`data/bam/ADR25_csv.txt`, tab-separiert, cp1252) — 3.374 Varianten zu
+  2.347 UN-Nummern. Beförderungskategorie (`N_KATEGORIE`) und Punktfaktor
+  (`N_MULTIPLIKATOR`) kommen aus der Datei; es wird nichts mehr geschätzt.
+- Natürlicher Schlüssel der UN-Daten ist **(UN-Nummer, Variante)**, abgesichert
+  durch den eindeutigen Index `idx_un_variant`.
+- Das ADR-PDF ist **nur noch Verifikation**: Abgleich des PDF-Parses gegen den
+  Datenbestand sowie Prüfsummen der Abschnitte 1.1.3.6 und 5.4.1.1 zur
+  Änderungsaufsicht. Es schreibt nicht mehr in die Datenbank.
+- Zusätzliche Felder je Variante: LQ, EQ, Kemler-Zahl, Klassifizierungscode,
+  Tankcode, Gefahrzettel.
+
+### Behoben
+
+- **Variantenfehler:** Ein Update allein über die UN-Nummer überschrieb die
+  Varianten gegenseitig (z. B. UN 1133: VG I/II/III hätten alle Kategorie 3
+  erhalten). 578 der 2.347 UN-Nummern sind mehrvariantig.
+- 223 Abweichungen gegenüber dem vorherigen Bestand behoben (Gefahrklasse 89,
+  Verpackungsgruppe 86, Beförderungskategorie 42, Tunnelcode 5).
+  Gegenprobe gegen einen unabhängigen PDF-Parse: 2.346 von 2.347 UN-Nummern
+  stimmen überein (99,96 %).
+
+### Tests und Betrieb
+
+- 63 Tests (vorher 30).
+- Container läuft als unprivilegierter Benutzer, mit `HEALTHCHECK`,
+  Upload-Obergrenze und behobenem XSS im Attributkontext.
+
+---
+
+## 2.0.0 — Rechtlich kritische Lücken geschlossen
+
+**Anlass:** Version 1.x stellte eine Beförderung allein anhand der Punktzahl
+fest. Das ist rechtlich falsch: Die Freistellung nach 1.1.3.6 hat **vier
+kumulative Voraussetzungen**.
+
+### Geändert
+
+| # | Problem in 1.x | Konsequenz | Umsetzung in 2.0 |
+|---|---|---|---|
+| 1 | Freistellung nur nach `Punkte ≤ 1000` | Güter der Beförderungskategorie 0 wurden fälschlich freigestellt | Vollständige 1.1.3.6-Prüfung über die Beförderungskategorie |
+| 2 | `max_quantity_per_transport` vorhanden, aber nie geprüft | Höchstmenge je Beförderungseinheit ignoriert | wird geprüft und blockiert |
+| 3 | Keine Unterscheidung Stückgut / Tank / Schüttgut | Tanktransport konnte fälschlich freigestellt werden | Beförderungsart ist Pflichtfeld |
+| 4 | `DEBUG=True`, Bindung an `0.0.0.0`, hartcodierter Secret Key | Debugger von außen erreichbar (RCE-Risiko) | behoben, Konfiguration über Umgebungsvariablen |
+| 5 | Keine Anmeldung | jeder im Netz konnte Stamm- und Personendaten ändern | Anmeldepflicht mit Rollen `admin`/`user` |
+| 6 | Kein Änderungsprotokoll | Änderungen an Kategorie/Punktfaktor nicht nachvollziehbar | Audit-Log (append-only) |
+| 7 | `escapeHtml()` escapete keine Anführungszeichen | XSS in Attributkontexten möglich | behoben |
+| 8 | Keine Tests | Regressionen blieben unbemerkt | 30 Unit-Tests für die Regelengine |
+| 9 | Jede Berechnung erzeugte eine Sendung | Datenbestand mit Testrechnungen aufgebläht | Trennung Vorschau / Speichern |
+| 10 | Dubletten, fehlende Kategorie als „Kat. 3“ angenommen | falsche Zuordnung möglich | Dubletten entfernt, Fail-Safe statt Standardwert |
+
+### Weiteres
+
+- Punkteformel korrekt: **Menge je Verpackung × Anzahl Verpackungen × Faktor**
+  (frontend und backend); die Anzahl der Verpackungen löst eine Neuberechnung aus.
+- Beförderungspapier bindet die **exakte** UN-Variante über `un_db_id`
+  (vorher: falsche Verpackungsgruppe bei mehrvariantigen UN-Nummern).
+- Gesamtmenge auf dem Beförderungspapier = Summe aus Menge × Anzahl Verpackungen.
+- Eigene Auswahlliste für UN-Varianten (Verpackungsgruppe, Kategorie, Faktor in
+  einer Zeile) statt `datalist`.
+
+> **Hinweis für Bestandsnutzer:** In 1.x gespeicherte Sendungen besitzen kein
+> gespeichertes Prüfergebnis. Für diese Altdaten wird beim PDF-Aufruf
+> konservativ „nicht freigestellt“ angenommen.
+
+---
+
+## 1.0.0 — Erste Fassung
+
+- Flask-Anwendung mit 1000-Punkte-Rechner, UN-Datenbank aus dem ADR-PDF,
+  Kunden- und Adressverwaltung, Beförderungspapier als PDF (ReportLab).
+- Oberfläche vollständig deutsch (Bootstrap).
