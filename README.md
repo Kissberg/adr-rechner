@@ -16,7 +16,7 @@ keine externen Dienste.
 > application, deployed as a single Docker container.
 
 <p align="center">
-  <img alt="Version 4.2" src="https://img.shields.io/badge/version-4.2-green">
+  <img alt="Version 4.2.1" src="https://img.shields.io/badge/version-4.2.1-green">
   <img alt="Tests: 160" src="https://img.shields.io/badge/tests-160-brightgreen">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
   <img alt="ADR 2025" src="https://img.shields.io/badge/ADR-2025-informational">
@@ -74,6 +74,7 @@ Einzelmaßnahmen und Testzahlen stehen in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Anlass | Kern der Verbesserung |
 |---|---|---|
+| **4.2.1** | Oberfläche verwies auf eine Passwortdatei, die es seit 4.1 nicht mehr gibt | Hinweis auf der Seite *Passwort ändern* korrigiert — kein Verhalten geändert |
 | **4.2** | Zugangsdaten lagen in der Container-Konfiguration | **Mailserver wird in der Anwendung gepflegt** (`Einstellungen`), `ADR_SMTP_*`/`ADR_MAIL_*` entfallen; Postfachwechsel ohne neuen Container |
 | **4.1** | Startpasswort musste vorab verteilt werden | **Erstzugang `admin`/`admin`** mit erzwungenem Wechsel, Anfangspasswort optional per E-Mail, Konten **deaktivieren oder endgültig löschen** |
 | **4.0** | Auslieferung an einen Betrieb mit mehreren Standorten | **Benutzerverwaltung** mit Rollen, Passwortrichtlinie, Kontosperre, Audit-Log, DSGVO-Lücken geschlossen |
@@ -358,7 +359,7 @@ docker run -d --name adr-rechner --restart unless-stopped \
   -e SECRET_KEY="$(cat ~/adr_secret.key)" -e TZ=Europe/Berlin \
   kissberg/adr-rechner:latest
 curl -s http://127.0.0.1:5050/healthz
-# {"status":"ok","un_numbers":3374,"version":"4.2.0"}
+# {"status":"ok","un_numbers":3374,"version":"4.2.1"}
 ```
 
 Datenbankänderungen laufen beim Start automatisch (`CREATE TABLE IF NOT EXISTS`
@@ -428,7 +429,7 @@ gemeldet) und die Prüfsummen dokumentieren. Ein eigener PDF-Parser steht als
 
 ## Dokumentation
 
-* **[Installations- und Bedienungsanleitung (PDF, Version 4.2)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.2.pdf)**
+* **[Installations- und Bedienungsanleitung (PDF, Version 4.2.1)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.2.1.pdf)**
   — 36 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
   E-Mail-Einstellungen, Rechner, Beförderungspapier, Datenschutz, Betrieb.
 * [CHANGELOG.md](CHANGELOG.md) — Änderungen je Version mit Begründung

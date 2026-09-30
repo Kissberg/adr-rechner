@@ -4,8 +4,25 @@ Alle nennenswerten Änderungen dieses Projekts. Die Versionierung folgt
 `MAJOR.MINOR.PATCH`; jeder Eintrag nennt die Beweggründe, nicht nur die
 Änderung.
 
-- **Aktuelle Version:** 4.2.0 (Datenstand ADR 2025)
+- **Aktuelle Version:** 4.2.1 (Datenstand ADR 2025)
 - **Datenquelle:** Datenbank GEFAHRGUT der BAM (`dl-de/by-2-0`)
+
+---
+
+## 4.2.1 — Veralteter Hinweis in der Oberfläche entfernt
+
+**Anlass:** Die Seite *Passwort ändern* wies darauf hin, dass nach der Änderung
+„eine eventuell vorhandene Datei mit dem erzeugten Anfangspasswort automatisch
+gelöscht“ werde. Eine solche Datei gibt es seit 4.1 nicht mehr — der Hinweis
+beschrieb einen Ablauf, den die Anwendung nicht mehr kennt, und war damit
+geeignet, falsche Erwartungen an den Passwortwechsel zu wecken.
+
+### Geändert
+
+- `templates/password_change.html`: Der Hinweis benennt jetzt die tatsächliche
+  Wirkung — nach dem Speichern gilt das bisherige Passwort nicht mehr, ein
+  Anfangspasswort ist verbraucht und sollte nicht weitergegeben werden.
+- Keine Verhaltensänderung, keine Änderung an Datenbank oder Schnittstellen.
 
 ---
 
