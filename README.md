@@ -379,6 +379,8 @@ Angebot; die mitgelieferte **`render.yaml`** beschreibt die Konfiguration für
 [Render](https://render.com) (Hobby-Tarif, 0 €/Monat, keine Zahlungsdaten
 hinterlegt):
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Kissberg/adr-rechner)
+
 1. Auf render.com anmelden → **New → Blueprint** → dieses Repository auswählen.
    Render liest `render.yaml`, baut das Image aus dem Dockerfile und fragt nur
    noch nach einem Namen.
