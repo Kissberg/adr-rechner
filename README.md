@@ -16,7 +16,7 @@ keine externen Dienste.
 > application, deployed as a single Docker container.
 
 <p align="center">
-  <img alt="Version 4.2.2" src="https://img.shields.io/badge/version-4.2.2-green">
+  <img alt="Version 4.2.3" src="https://img.shields.io/badge/version-4.2.3-green">
   <img alt="Tests: 160" src="https://img.shields.io/badge/tests-160-brightgreen">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
   <img alt="ADR 2025" src="https://img.shields.io/badge/ADR-2025-informational">
@@ -74,6 +74,7 @@ Einzelmaßnahmen und Testzahlen stehen in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Anlass | Kern der Verbesserung |
 |---|---|---|
+| **4.2.3** | Render zeigte trotz der neuen Blueprint bisher noch die offene User-Ansicht | `render.yaml` aktiviert die Anmeldung; vollständige Admin-Oberfläche mit Benutzerverwaltung, Einstellungen und ADR-Import, Erstzugang `admin`/`admin` mit erzwungenem Passwortwechsel; Anleitung und Deployment-Dokumentation auf 4.2.3 aktualisiert |
 | **4.2.2** | Erststart mit **leerem Datenverzeichnis** brach ab: zwei Worker initialisierten die Datenbank gleichzeitig, einer verlor das Rennen um die SQLite-Sperre (`database is locked`, Exit 3) | Anwendung wird mit `--preload` geladen — `init_db()` läuft einmal im Master. Betraf jede frisch aufgesetzte Instanz, auch Test- und Hosting-Umgebungen. Dazu eine **fertige `render.yaml`** für eine öffentliche Instanz mit Anmeldung und vollem Administratorzugang (kostenloser Instanztyp) |
 | **4.2.1** | Oberfläche verwies auf eine Passwortdatei, die es seit 4.1 nicht mehr gibt | Hinweis auf der Seite *Passwort ändern* korrigiert — kein Verhalten geändert |
 | **4.2** | Zugangsdaten lagen in der Container-Konfiguration | **Mailserver wird in der Anwendung gepflegt** (`Einstellungen`), `ADR_SMTP_*`/`ADR_MAIL_*` entfallen; Postfachwechsel ohne neuen Container |
@@ -81,6 +82,23 @@ Einzelmaßnahmen und Testzahlen stehen in [CHANGELOG.md](CHANGELOG.md).
 | **4.0** | Auslieferung an einen Betrieb mit mehreren Standorten | **Benutzerverwaltung** mit Rollen, Passwortrichtlinie, Kontosperre, Audit-Log, DSGVO-Lücken geschlossen |
 | **3.0** | Fehlerhafte Punktzahlen durch geschätzte Kategorien | **Amtliche BAM-Daten** statt PDF-Parsing, Variantenschlüssel (UN-Nummer, VG), ADR-PDF nur noch Verifikation |
 | **2.0** | Freistellung allein nach Punktzahl war rechtlich falsch | Vollständige Prüfung der **vier kumulativen Voraussetzungen** nach 1.1.3.6, Anmeldepflicht, Audit-Log |
+
+### 4.2.3 — Render-Instanz mit Anmeldung und Administratorzugang
+
+Die Render-Blueprint wird jetzt ausdrücklich mit `AUTH_ENABLED=1` und
+`PREFER_SECURE_COOKIE=1` betrieben. Damit erscheint wieder die Anmeldeseite und
+nach dem Login stehen auch **Benutzerverwaltung**, **Einstellungen** und
+**ADR-Import** zur Verfügung — nicht nur die Rechneransicht aus der vorherigen
+öffentlichen User-Konfiguration.
+
+Auf einem leeren Render-Datenverzeichnis entsteht der dokumentierte Erstzugang
+`admin`/`admin`; beim ersten Login wird der Passwortwechsel erzwungen. Das
+Passwort steht nicht in `render.yaml`. Die öffentliche Instanz muss unmittelbar
+nach dem Deployment selbst übernommen werden; alternativ kann Render für
+`ADR_ADMIN_PASSWORD` einen geheimen Wert erzeugen.
+
+Die Installations- und Bedienungsanleitung wurde als Version 4.2.3 neu erzeugt,
+die lokale Deployment-Vorlage und die Prüfbeispiele zeigen ebenfalls 4.2.3.
 
 ### 4.2.2 — Erststart auf einem leeren Datenbestand
 
@@ -443,7 +461,7 @@ docker run -d --name adr-rechner --restart unless-stopped \
   -e SECRET_KEY="$(cat ~/adr_secret.key)" -e TZ=Europe/Berlin \
   kissberg/adr-rechner:latest
 curl -s http://127.0.0.1:5050/healthz
-# {"status":"ok","un_numbers":3374,"version":"4.2.2"}
+# {"status":"ok","un_numbers":3374,"version":"4.2.3"}
 ```
 
 Datenbankänderungen laufen beim Start automatisch (`CREATE TABLE IF NOT EXISTS`
@@ -513,8 +531,8 @@ gemeldet) und die Prüfsummen dokumentieren. Ein eigener PDF-Parser steht als
 
 ## Dokumentation
 
-* **[Installations- und Bedienungsanleitung (PDF, Version 4.2.2)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.2.2.pdf)**
-  — 36 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
+* **[Installations- und Bedienungsanleitung (PDF, Version 4.2.3)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.2.3.pdf)**
+  — 37 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
   E-Mail-Einstellungen, Rechner, Beförderungspapier, Datenschutz, Betrieb.
 * [CHANGELOG.md](CHANGELOG.md) — Änderungen je Version mit Begründung
 * [DSGVO.md](DSGVO.md) — Datenschutz-Dokumentation

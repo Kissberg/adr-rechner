@@ -4,8 +4,40 @@ Alle nennenswerten Änderungen dieses Projekts. Die Versionierung folgt
 `MAJOR.MINOR.PATCH`; jeder Eintrag nennt die Beweggründe, nicht nur die
 Änderung.
 
-- **Aktuelle Version:** 4.2.2 (Datenstand ADR 2025)
+- **Aktuelle Version:** 4.2.3 (Datenstand ADR 2025)
 - **Datenquelle:** Datenbank GEFAHRGUT der BAM (`dl-de/by-2-0`)
+
+---
+
+## 4.2.3 — Render-Instanz mit Anmeldung und Administratorzugang
+
+**Anlass:** Die öffentliche Render-Instanz lief bisher mit `AUTH_ENABLED=0`.
+Dadurch sah jeder Besucher direkt die Rechneransicht; die Anmeldeseite und die
+Administrationsbereiche waren auf dieser Instanz nicht erreichbar. Die bereits
+vorbereitete Blueprint-Änderung wurde als eigener Patch-Release ausgeliefert,
+damit Image, Versionsanzeige und Dokumentation eindeutig zusammenpassen.
+
+### Geändert
+
+- `render.yaml`: `AUTH_ENABLED=1`, `ADR_ADMIN_USER=admin` und
+  `PREFER_SECURE_COOKIE=1`; `ADR_ADMIN_PASSWORD` bleibt bewusst ungesetzt.
+  Auf einem leeren Datenbestand gilt dadurch der ursprüngliche Erstzugang
+  `admin`/`admin`, anschließend erzwingt die Anwendung den Passwortwechsel.
+- `APP_VERSION` = `4.2.3`; README, Anleitung, Healthcheck-Beispiel und
+  Dokumentationsdatei auf 4.2.3 nachgezogen.
+- Neue Deployment-Vorlage `~/adr-deploy-v4.2.3.sh`: Sicherung, Vorbedingungen,
+  Vorflug auf leerem Volume, Healthcheck, automatischer Rückbau auf 4.2.2 und
+  Prüfung von Version, Startbefehl, Datenbestand und Benutzern.
+
+### Geprüft
+
+- Die exakte Render-Umgebung wurde lokal mit einem frischen Datenvolume
+  ausgeführt: `/` antwortet 302 auf `/auth/login`, `/api/kunden` antwortet
+  401, `admin`/`admin` führt auf den erzwungenen Passwortwechsel, und
+  `/healthz` meldet 3.374 UN-Varianten.
+- Die vollständige Testsuite bleibt bei **160 Tests**.
+- Die Bedienungsanleitung wurde aus einer frischen 4.2.3-Instanz neu erzeugt,
+  als PDF textlich geprüft und unter `docs/` abgelegt.
 
 ---
 
