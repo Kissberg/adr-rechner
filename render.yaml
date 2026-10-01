@@ -1,0 +1,35 @@
+# ADR 1000-Punkte-Rechner — Blueprint für eine kostenlose Testinstanz bei Render
+# ---------------------------------------------------------------------------
+# Zweck: Kollegen testen die Anwendung über eine öffentliche HTTPS-Adresse,
+# ohne dass eine Instanz im eigenen Netz erreichbar gemacht werden muss.
+#
+# WICHTIG - diese Blueprint ist NUR für Tests gedacht:
+#   * frisches, flüchtiges Datenverzeichnis (keine echten Kunden-/Sendungsdaten),
+#   * Anmeldung abgeschaltet (AUTH_ENABLED=0) -> kein Administratorzugang auf
+#     einer öffentlichen Adresse.
+# Für den Produktivbetrieb eine bezahlte Instanz mit Disk verwenden oder die
+# Anwendung im eigenen Netz betreiben (siehe README, Abschnitt Betrieb).
+#
+# dockerCommand überschreibt den Startbefehl des Images: der Port kommt vom
+# Hoster ($PORT), und --preload verhindert das Wettrennen zweier Worker um die
+# SQLite-Sperre beim ersten Start (siehe CHANGELOG 4.2.2).
+services:
+  - type: web
+    name: adr-rechner-demo
+    runtime: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /healthz
+    autoDeploy: true
+    dockerCommand: >-
+      gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 2 --preload
+      --timeout 120 --access-logfile - --error-logfile - app:app
+    envVars:
+      - key: TZ
+        value: Europe/Berlin
+      - key: HOME
+        value: /tmp
+      - key: AUTH_ENABLED
+        value: "0"
+      - key: SECRET_KEY
+        generateValue: true

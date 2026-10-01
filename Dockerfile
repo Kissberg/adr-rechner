@@ -48,9 +48,16 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # Worker/Thread-Zahl reduziert: SQLite erlaubt nur einen Schreiber gleichzeitig.
 # Mehr Worker erhöhen hier nicht den Durchsatz, sondern die Gefahr von
 # "database is locked". Für höhere Last auf PostgreSQL umstellen.
+#
+# --preload ist PFLICHT: die Anwendung initialisiert beim Import die Datenbank
+# (init_db()). Ohne --preload tut das jeder Worker gleichzeitig; auf einem leeren
+# Volume verliert einer das Rennen und stirbt mit "database is locked", gunicorn
+# bricht dann mit "Worker failed to boot" ab (Exit 3). Mit --preload laeuft
+# init_db() einmal im Master, bevor die Worker abgespalten werden.
 CMD ["gunicorn", "--bind", "0.0.0.0:5050", \
      "--workers", "2", \
      "--threads", "2", \
+     "--preload", \
      "--timeout", "120", \
      "--access-logfile", "-", \
      "--error-logfile", "-", \

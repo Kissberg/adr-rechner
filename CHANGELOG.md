@@ -4,8 +4,56 @@ Alle nennenswerten Änderungen dieses Projekts. Die Versionierung folgt
 `MAJOR.MINOR.PATCH`; jeder Eintrag nennt die Beweggründe, nicht nur die
 Änderung.
 
-- **Aktuelle Version:** 4.2.1 (Datenstand ADR 2025)
+- **Aktuelle Version:** 4.2.2 (Datenstand ADR 2025)
 - **Datenquelle:** Datenbank GEFAHRGUT der BAM (`dl-de/by-2-0`)
+
+---
+
+## 4.2.2 — Erststart auf leerem Datenbestand repariert
+
+**Anlass:** Beim ersten Start mit einem **leeren Datenverzeichnis** — also bei
+jeder Neuinstallation, jeder frisch aufgesetzten Testinstanz und jedem neuen
+Server — konnte der Container sofort wieder aussteigen. Beide gunicorn-Worker
+führten gleichzeitig `init_db()` aus; einer verlor das Rennen um die Schreibsperre
+der SQLite-Datei und beendete sich mit
+
+```
+sqlite3.OperationalError: database is locked
+Worker (pid:7) exited with code 3.
+Reason: Worker failed to boot.
+```
+
+gunicorn stoppte daraufhin den Master, der Container endete mit Exit-Code 3. Auf
+einem bereits befüllten Volume trat das nie auf (dort ist `init_db()` schnell),
+sodass der Fehler lange unentdeckt blieb — er traf aber **jede** frisch
+aufgesetzte Instanz, auch jede Prüf- und Hosting-Umgebung.
+
+### Geändert
+
+- `Dockerfile`: Der Startbefehl lädt die Anwendung mit **`--preload`**, bevor
+  gunicorn die Worker abspaltet. `init_db()` läuft damit **einmal** im
+  Master-Prozess; das Wettrennen um die SQLite-Sperre entfällt. Die Anzahl der
+  Worker (2) und das Einlesen der 3.374 BAM-Varianten bleiben unverändert.
+  Wer den Container mit eigenem Startbefehl betreibt, muss `--preload` mitgeben
+  oder mit `--workers 1` fahren.
+- `render.yaml` (neu): Blueprint für eine **kostenlose Testinstanz** bei Render —
+  Free-Instanz (512 MB), Startbefehl mit `$PORT` und `--preload`, Healthcheck
+  `/healthz`, `AUTH_ENABLED=0`. Damit lassen sich Kollegen testen, ohne eine
+  Instanz im eigenen Netz freizugeben. README und Anleitung beschreiben den Weg
+  und seine Grenzen (Ruhezustand nach 15 Minuten, flüchtiges Dateisystem).
+- `APP_VERSION` = `4.2.2`; Versionsangaben in `README.md`, `CHANGELOG.md` und der
+  Installations- und Bedienungsanleitung nachgezogen, Screenshots aus einer
+  frischen 4.2.2-Instanz neu erzeugt.
+
+### Geprüft
+
+- **Erststart auf leerem Volume mit dem Standard-Startbefehl**: Container läuft,
+  `/healthz` meldet `{"status":"ok","un_numbers":3374,"version":"4.2.2"}`.
+- **Vorgänger-Startbefehl ohne `--preload`** bricht auf demselben leeren Volume
+  weiterhin mit Exit 3 ab — die Ursache ist damit belegt und nicht nur vermutet.
+- **160 Tests grün** (`pytest -q`, 76 s). Keine Testanpassung nötig: geändert
+  wurde der Startparameter, kein Anwendungscode.
+- Laufzeitbedarf ca. 80 MB Arbeitsspeicher (Grundlage der Free-Instanz).
 
 ---
 

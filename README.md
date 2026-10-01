@@ -16,7 +16,7 @@ keine externen Dienste.
 > application, deployed as a single Docker container.
 
 <p align="center">
-  <img alt="Version 4.2.1" src="https://img.shields.io/badge/version-4.2.1-green">
+  <img alt="Version 4.2.2" src="https://img.shields.io/badge/version-4.2.2-green">
   <img alt="Tests: 160" src="https://img.shields.io/badge/tests-160-brightgreen">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
   <img alt="ADR 2025" src="https://img.shields.io/badge/ADR-2025-informational">
@@ -74,12 +74,39 @@ Einzelmaßnahmen und Testzahlen stehen in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Anlass | Kern der Verbesserung |
 |---|---|---|
+| **4.2.2** | Erststart mit **leerem Datenverzeichnis** brach ab: zwei Worker initialisierten die Datenbank gleichzeitig, einer verlor das Rennen um die SQLite-Sperre (`database is locked`, Exit 3) | Anwendung wird mit `--preload` geladen — `init_db()` läuft einmal im Master. Betraf jede frisch aufgesetzte Instanz, auch Test- und Hosting-Umgebungen. Dazu eine **fertige `render.yaml` für eine kostenlose Testinstanz** |
 | **4.2.1** | Oberfläche verwies auf eine Passwortdatei, die es seit 4.1 nicht mehr gibt | Hinweis auf der Seite *Passwort ändern* korrigiert — kein Verhalten geändert |
 | **4.2** | Zugangsdaten lagen in der Container-Konfiguration | **Mailserver wird in der Anwendung gepflegt** (`Einstellungen`), `ADR_SMTP_*`/`ADR_MAIL_*` entfallen; Postfachwechsel ohne neuen Container |
 | **4.1** | Startpasswort musste vorab verteilt werden | **Erstzugang `admin`/`admin`** mit erzwungenem Wechsel, Anfangspasswort optional per E-Mail, Konten **deaktivieren oder endgültig löschen** |
 | **4.0** | Auslieferung an einen Betrieb mit mehreren Standorten | **Benutzerverwaltung** mit Rollen, Passwortrichtlinie, Kontosperre, Audit-Log, DSGVO-Lücken geschlossen |
 | **3.0** | Fehlerhafte Punktzahlen durch geschätzte Kategorien | **Amtliche BAM-Daten** statt PDF-Parsing, Variantenschlüssel (UN-Nummer, VG), ADR-PDF nur noch Verifikation |
 | **2.0** | Freistellung allein nach Punktzahl war rechtlich falsch | Vollständige Prüfung der **vier kumulativen Voraussetzungen** nach 1.1.3.6, Anmeldepflicht, Audit-Log |
+
+### 4.2.2 — Erststart auf einem leeren Datenbestand
+
+Der erste Start mit einem **leeren Datenverzeichnis** — eine Neuinstallation, eine
+frische Testinstanz, ein neuer Server — konnte sofort wieder enden: beide
+gunicorn-Worker führten gleichzeitig `init_db()` aus, einer verlor das Rennen um
+die Schreibsperre der Datenbank und beendete sich mit `sqlite3.OperationalError:
+database is locked`. gunicorn brach daraufhin mit *Worker failed to boot* ab, der
+Container stoppte mit Exit-Code 3. Auf einem bereits befüllten Volume fiel das
+nie auf, jede frisch aufgesetzte Instanz traf es dagegen zuverlässig.
+
+Seit 4.2.2 lädt gunicorn die Anwendung mit `--preload`: `init_db()` läuft
+**einmal** im Master-Prozess, bevor die Worker abgespalten werden — das
+Wettrennen entfällt, das Einlesen der 3.374 BAM-Varianten bleibt unverändert.
+Wer den Container mit eigenem Startbefehl betreibt, muss `--preload` mitgeben
+(oder mit `--workers 1` fahren):
+
+```bash
+gunicorn --bind 0.0.0.0:5050 --workers 2 --threads 2 --preload \
+  --timeout 120 --access-logfile - --error-logfile - app:app
+```
+
+Zusammen mit dieser Version kommt eine **fertige `render.yaml`**: damit lässt
+sich der Rechner in wenigen Minuten als kostenlose Testinstanz für Kollegen
+veröffentlichen, ohne eine Instanz im eigenen Netz freizugeben (README,
+Abschnitt *Testinstanz für Kollegen*).
 
 ### 4.2 — Mailversand gehört in die Anwendung
 
@@ -344,6 +371,44 @@ docker run -d --name adr-muenchen -p 127.0.0.1:5051:5050 \
   kissberg/adr-rechner:latest
 ```
 
+### Testinstanz für Kollegen — kostenlos, ohne eigenen Server
+
+Für Tests durch Kollegen muss keine Instanz im eigenen Netz erreichbar gemacht
+werden. Der Rechner läuft als einzelner Container auch auf einem kostenlosen
+Angebot; die mitgelieferte **`render.yaml`** beschreibt die Konfiguration für
+[Render](https://render.com) (Hobby-Tarif, 0 €/Monat, keine Zahlungsdaten
+hinterlegt):
+
+1. Auf render.com anmelden → **New → Blueprint** → dieses Repository auswählen.
+   Render liest `render.yaml`, baut das Image aus dem Dockerfile und fragt nur
+   noch nach einem Namen.
+2. Nach wenigen Minuten ist die Instanz unter `https://<name>.onrender.com`
+   erreichbar — die Adresse lässt sich weitergeben wie jede andere Webseite.
+
+Was die Blueprint setzt:
+
+| Punkt | Wert | Grund |
+|---|---|---|
+| Instanztyp | Free (512 MB RAM) | gemessener Bedarf der Anwendung: ca. 80 MB |
+| Startbefehl | `gunicorn --bind 0.0.0.0:$PORT … --preload app:app` | der Port kommt vom Hoster; `--preload` ist Pflicht (siehe 4.2.2) |
+| Healthcheck | `/healthz` | ohne Anmeldung erreichbar |
+| `AUTH_ENABLED` | `0` | **nur** für die Testinstanz: auf einer öffentlichen Adresse soll es keinen Administratorzugang geben |
+| `SECRET_KEY` | von Render erzeugt | Sitzungsschlüssel |
+
+**Grenzen der kostenlosen Instanz** (Angaben des Anbieters): nach 15 Minuten
+ohne Zugriff schläft sie ein und braucht beim nächsten Aufruf etwa eine Minute;
+das Dateisystem ist flüchtig, angelegte Kunden und Sendungen sind nach einem
+Neustart weg — die UN-Datenbank baut sich beim Start automatisch neu auf,
+rechnen und Beförderungspapier funktionieren also unverändert; 5 GB Datenverkehr
+pro Monat. Wer Testdaten behalten will, braucht eine bezahlte Instanz mit
+Datenträger oder betreibt die Anwendung im eigenen Netz.
+
+> **Keine echten Daten in eine öffentliche Testinstanz.** Die Datenbank startet
+> auf einem leeren Volume; ohne eingebundenes produktives Volume sind dort keine
+> Kunden- und Sendungsdaten vorhanden. Soll die Anmeldung mitgetestet werden,
+> `AUTH_ENABLED=1` **und** ein eigenes Startpasswort setzen — `admin`/`admin`
+> gehört nie auf eine öffentliche Adresse.
+
 ### Sicherung und Update
 
 ```bash
@@ -359,7 +424,7 @@ docker run -d --name adr-rechner --restart unless-stopped \
   -e SECRET_KEY="$(cat ~/adr_secret.key)" -e TZ=Europe/Berlin \
   kissberg/adr-rechner:latest
 curl -s http://127.0.0.1:5050/healthz
-# {"status":"ok","un_numbers":3374,"version":"4.2.1"}
+# {"status":"ok","un_numbers":3374,"version":"4.2.2"}
 ```
 
 Datenbankänderungen laufen beim Start automatisch (`CREATE TABLE IF NOT EXISTS`
@@ -429,7 +494,7 @@ gemeldet) und die Prüfsummen dokumentieren. Ein eigener PDF-Parser steht als
 
 ## Dokumentation
 
-* **[Installations- und Bedienungsanleitung (PDF, Version 4.2.1)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.2.1.pdf)**
+* **[Installations- und Bedienungsanleitung (PDF, Version 4.2.2)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.2.2.pdf)**
   — 36 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
   E-Mail-Einstellungen, Rechner, Beförderungspapier, Datenschutz, Betrieb.
 * [CHANGELOG.md](CHANGELOG.md) — Änderungen je Version mit Begründung
