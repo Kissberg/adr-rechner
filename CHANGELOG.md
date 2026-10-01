@@ -36,11 +36,20 @@ aufgesetzte Instanz, auch jede Prüf- und Hosting-Umgebung.
   Worker (2) und das Einlesen der 3.374 BAM-Varianten bleiben unverändert.
   Wer den Container mit eigenem Startbefehl betreibt, muss `--preload` mitgeben
   oder mit `--workers 1` fahren.
-- `render.yaml` (neu): Blueprint für eine **kostenlose Testinstanz** bei Render —
-  Free-Instanz (512 MB), Startbefehl mit `$PORT` und `--preload`, Healthcheck
-  `/healthz`, `AUTH_ENABLED=0`. Damit lassen sich Kollegen testen, ohne eine
-  Instanz im eigenen Netz freizugeben. README und Anleitung beschreiben den Weg
-  und seine Grenzen (Ruhezustand nach 15 Minuten, flüchtiges Dateisystem).
+- `render.yaml` (neu): Blueprint für eine **öffentliche Instanz** bei Render —
+  kostenloser Instanztyp (512 MB), Startbefehl mit `$PORT` und `--preload`,
+  Healthcheck `/healthz`. Damit lässt sich die Anwendung benutzen, ohne eine
+  Instanz im eigenen Netz freizugeben. **Nachtrag (Konfiguration, kein
+  Anwendungscode):** die Blueprint liefert die Anwendung mit **eingeschalteter
+  Anmeldung** aus — `AUTH_ENABLED=1`, `ADR_ADMIN_USER=admin`,
+  `PREFER_SECURE_COOKIE=1`, **kein** `ADR_ADMIN_PASSWORD`, damit auf dem leeren
+  Volume der dokumentierte Erstzugang `admin`/`admin` mit erzwungenem Wechsel
+  entsteht. Die öffentliche Adresse zeigt dadurch die vollständige Anwendung
+  einschließlich Benutzerverwaltung, Einstellungen und ADR-Import. Ein Passwort
+  gehört nicht in eine öffentliche Blueprint; der Erstzugang ist unmittelbar
+  nach dem Deployment zu beanspruchen. README und Anleitung beschreiben den Weg,
+  den Erstzugang und die Grenzen (Ruhezustand nach 15 Minuten, flüchtiges
+  Dateisystem).
 - `APP_VERSION` = `4.2.2`; Versionsangaben in `README.md`, `CHANGELOG.md` und der
   Installations- und Bedienungsanleitung nachgezogen, Screenshots aus einer
   frischen 4.2.2-Instanz neu erzeugt.

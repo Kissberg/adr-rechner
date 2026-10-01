@@ -1,14 +1,31 @@
-# ADR 1000-Punkte-Rechner — Blueprint für eine kostenlose Testinstanz bei Render
+# ADR 1000-Punkte-Rechner — Blueprint für eine Instanz bei Render
 # ---------------------------------------------------------------------------
-# Zweck: Kollegen testen die Anwendung über eine öffentliche HTTPS-Adresse,
-# ohne dass eine Instanz im eigenen Netz erreichbar gemacht werden muss.
+# Zweck: die Anwendung über eine öffentliche HTTPS-Adresse bereitstellen —
+# vollständige Oberfläche inklusive der Administrationsbereiche
+# (Benutzerverwaltung, Einstellungen, ADR-Import), auch für Kollegen, die
+# keinen Zugang zum eigenen Netz haben.
 #
-# WICHTIG - diese Blueprint ist NUR für Tests gedacht:
-#   * frisches, flüchtiges Datenverzeichnis (keine echten Kunden-/Sendungsdaten),
-#   * Anmeldung abgeschaltet (AUTH_ENABLED=0) -> kein Administratorzugang auf
-#     einer öffentlichen Adresse.
-# Für den Produktivbetrieb eine bezahlte Instanz mit Disk verwenden oder die
-# Anwendung im eigenen Netz betreiben (siehe README, Abschnitt Betrieb).
+# Die Anmeldung ist EINGESCHALTET (AUTH_ENABLED=1): beim Aufruf erscheint die
+# Anmeldeseite. Auf dem leeren Datenverzeichnis legt die Anwendung beim ersten
+# Start den ersten Administrator an — Benutzername `admin`, Passwort `admin`
+# (Werkseinstellung aus auth.py, BOOTSTRAP_ADMIN_*), weil ADR_ADMIN_PASSWORD
+# hier bewusst NICHT gesetzt wird: ein Passwort im öffentlichen Repository wäre
+# ein veröffentlichtes Passwort. Der Wechsel wird bei der ersten Anmeldung
+# erzwungen, bis dahin ist keine andere Seite und keine Schnittstelle
+# erreichbar.
+#
+# HINWEIS: Das Konto `admin`/`admin` ist offen, bis es jemand benutzt hat.
+# Die Adresse daher unmittelbar nach dem Deployment selbst aufrufen, sich
+# anmelden und ein eigenes Passwort setzen. Wer zuerst anmeldet, bestimmt das
+# Passwort.
+#
+# Datenverzeichnis: das Dateisystem der Free-Instanz ist flüchtig (Neustart ~15
+# Minuten ohne Zugriff). Bei jedem Neustart entsteht der Erstzugang erneut,
+# Testdaten sind weg; die UN-Datenbank baut sich beim Start neu auf.
+#
+# Diese Angaben stehen an drei Stellen und müssen zusammen gepflegt werden:
+# hier, im README (Abschnitt *Testinstanz für Kollegen*) und in der Anleitung
+# (Abschnitt 11.5).
 #
 # dockerCommand überschreibt den Startbefehl des Images: der Port kommt vom
 # Hoster ($PORT), und --preload verhindert das Wettrennen zweier Worker um die
@@ -29,7 +46,17 @@ services:
         value: Europe/Berlin
       - key: HOME
         value: /tmp
+      # Anmeldepflicht. Ohne diese Zeile gilt ebenfalls 1 (Standard in auth.py);
+      # sie steht hier ausdrücklich, damit die Konfiguration lesbar bleibt.
       - key: AUTH_ENABLED
-        value: "0"
+        value: "1"
+      # Benutzername des ersten Administrators. Das Passwort bleibt bei der
+      # Werkseinstellung `admin` (erzwungener Wechsel bei der ersten Anmeldung).
+      - key: ADR_ADMIN_USER
+        value: admin
+      # Render liefert ausschließlich über HTTPS aus; damit wird das
+      # Sitzungscookie nur über eine gesicherte Verbindung übertragen.
+      - key: PREFER_SECURE_COOKIE
+        value: "1"
       - key: SECRET_KEY
         generateValue: true

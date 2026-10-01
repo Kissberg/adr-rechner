@@ -74,7 +74,7 @@ Einzelmaßnahmen und Testzahlen stehen in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Anlass | Kern der Verbesserung |
 |---|---|---|
-| **4.2.2** | Erststart mit **leerem Datenverzeichnis** brach ab: zwei Worker initialisierten die Datenbank gleichzeitig, einer verlor das Rennen um die SQLite-Sperre (`database is locked`, Exit 3) | Anwendung wird mit `--preload` geladen — `init_db()` läuft einmal im Master. Betraf jede frisch aufgesetzte Instanz, auch Test- und Hosting-Umgebungen. Dazu eine **fertige `render.yaml` für eine kostenlose Testinstanz** |
+| **4.2.2** | Erststart mit **leerem Datenverzeichnis** brach ab: zwei Worker initialisierten die Datenbank gleichzeitig, einer verlor das Rennen um die SQLite-Sperre (`database is locked`, Exit 3) | Anwendung wird mit `--preload` geladen — `init_db()` läuft einmal im Master. Betraf jede frisch aufgesetzte Instanz, auch Test- und Hosting-Umgebungen. Dazu eine **fertige `render.yaml`** für eine öffentliche Instanz mit Anmeldung und vollem Administratorzugang (kostenloser Instanztyp) |
 | **4.2.1** | Oberfläche verwies auf eine Passwortdatei, die es seit 4.1 nicht mehr gibt | Hinweis auf der Seite *Passwort ändern* korrigiert — kein Verhalten geändert |
 | **4.2** | Zugangsdaten lagen in der Container-Konfiguration | **Mailserver wird in der Anwendung gepflegt** (`Einstellungen`), `ADR_SMTP_*`/`ADR_MAIL_*` entfallen; Postfachwechsel ohne neuen Container |
 | **4.1** | Startpasswort musste vorab verteilt werden | **Erstzugang `admin`/`admin`** mit erzwungenem Wechsel, Anfangspasswort optional per E-Mail, Konten **deaktivieren oder endgültig löschen** |
@@ -104,9 +104,10 @@ gunicorn --bind 0.0.0.0:5050 --workers 2 --threads 2 --preload \
 ```
 
 Zusammen mit dieser Version kommt eine **fertige `render.yaml`**: damit lässt
-sich der Rechner in wenigen Minuten als kostenlose Testinstanz für Kollegen
-veröffentlichen, ohne eine Instanz im eigenen Netz freizugeben (README,
-Abschnitt *Testinstanz für Kollegen*).
+sich der Rechner in wenigen Minuten kostenlos unter einer öffentlichen Adresse
+bereitstellen — mit Anmeldung und vollständigem Administratorzugang, ohne eine
+Instanz im eigenen Netz freizugeben (README, Abschnitt *Testinstanz für
+Kollegen*).
 
 ### 4.2 — Mailversand gehört in die Anwendung
 
@@ -373,11 +374,13 @@ docker run -d --name adr-muenchen -p 127.0.0.1:5051:5050 \
 
 ### Testinstanz für Kollegen — kostenlos, ohne eigenen Server
 
-Für Tests durch Kollegen muss keine Instanz im eigenen Netz erreichbar gemacht
-werden. Der Rechner läuft als einzelner Container auch auf einem kostenlosen
-Angebot; die mitgelieferte **`render.yaml`** beschreibt die Konfiguration für
+Für Kollegen muss keine Instanz im eigenen Netz erreichbar gemacht werden. Der
+Rechner läuft als einzelner Container auch auf einem kostenlosen Angebot; die
+mitgelieferte **`render.yaml`** beschreibt die Konfiguration für
 [Render](https://render.com) (Hobby-Tarif, 0 €/Monat, keine Zahlungsdaten
-hinterlegt):
+hinterlegt) — mit **eingeschalteter Anmeldung** und damit dem vollständigen
+Funktionsumfang einschließlich Benutzerverwaltung, Einstellungen und
+ADR-Import:
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Kissberg/adr-rechner)
 
@@ -386,6 +389,9 @@ hinterlegt):
    noch nach einem Namen.
 2. Nach wenigen Minuten ist die Instanz unter `https://<name>.onrender.com`
    erreichbar — die Adresse lässt sich weitergeben wie jede andere Webseite.
+3. Beim ersten Aufruf erscheint die Anmeldeseite (Konto `admin`, Passwort
+   `admin`, siehe Hinweis unten); die Anwendung verlangt sofort ein eigenes
+   Passwort und zeigt danach alle Bereiche.
 
 Was die Blueprint setzt:
 
@@ -394,7 +400,10 @@ Was die Blueprint setzt:
 | Instanztyp | Free (512 MB RAM) | gemessener Bedarf der Anwendung: ca. 80 MB |
 | Startbefehl | `gunicorn --bind 0.0.0.0:$PORT … --preload app:app` | der Port kommt vom Hoster; `--preload` ist Pflicht (siehe 4.2.2) |
 | Healthcheck | `/healthz` | ohne Anmeldung erreichbar |
-| `AUTH_ENABLED` | `0` | **nur** für die Testinstanz: auf einer öffentlichen Adresse soll es keinen Administratorzugang geben |
+| `AUTH_ENABLED` | `1` | Anmeldepflicht: der Aufruf führt auf die Anmeldeseite, ohne Anmeldung antworten die Seiten mit 302 und die Schnittstellen mit 401 |
+| `ADR_ADMIN_USER` | `admin` | Benutzername des ersten Administrators |
+| `ADR_ADMIN_PASSWORD` | **nicht gesetzt** | bewusst: es gilt der dokumentierte Erstzugang `admin`/`admin`, der Wechsel wird bei der ersten Anmeldung erzwungen. Ein Passwort in einer öffentlichen Blueprint wäre ein veröffentlichtes Passwort |
+| `PREFER_SECURE_COOKIE` | `1` | Render liefert ausschließlich über HTTPS aus; das Sitzungscookie wird damit nur über gesicherte Verbindungen übertragen |
 | `SECRET_KEY` | von Render erzeugt | Sitzungsschlüssel |
 
 **Grenzen der kostenlosen Instanz** (Angaben des Anbieters): nach 15 Minuten
@@ -405,11 +414,19 @@ rechnen und Beförderungspapier funktionieren also unverändert; 5 GB Datenverke
 pro Monat. Wer Testdaten behalten will, braucht eine bezahlte Instanz mit
 Datenträger oder betreibt die Anwendung im eigenen Netz.
 
-> **Keine echten Daten in eine öffentliche Testinstanz.** Die Datenbank startet
-> auf einem leeren Volume; ohne eingebundenes produktives Volume sind dort keine
-> Kunden- und Sendungsdaten vorhanden. Soll die Anmeldung mitgetestet werden,
-> `AUTH_ENABLED=1` **und** ein eigenes Startpasswort setzen — `admin`/`admin`
-> gehört nie auf eine öffentliche Adresse.
+> **Erstzugang sofort beanspruchen.** Auf dem leeren Datenverzeichnis entsteht
+> beim ersten Start der Administrator `admin`/`admin` mit erzwungenem
+> Passwortwechsel. Bis zur ersten Anmeldung ist dieses Konto für jeden offen,
+> der die Adresse kennt: die Instanz daher unmittelbar nach dem Deployment
+> selbst aufrufen, anmelden und ein eigenes Passwort setzen — wer zuerst
+> anmeldet, bestimmt das Passwort.
+>
+> **Keine echten Daten in eine öffentliche Instanz.** Die Datenbank startet auf
+> einem leeren Volume; ohne eingebundenes produktives Volume sind dort keine
+> Kunden- und Sendungsdaten vorhanden. Wer kein offenes Erstzugangsfenster will,
+> setzt `ADR_ADMIN_PASSWORD` in der Blueprint — bei Render mit
+> `generateValue: true` erzeugt der Anbieter den Wert selbst, er steht dann
+> **nicht** im Repository.
 
 ### Sicherung und Update
 
