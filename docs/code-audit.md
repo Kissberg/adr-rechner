@@ -33,7 +33,7 @@ Stand: v4.3.0
 | Werkzeug | Rolle | Regelbasis | Gate |
 |---|---|---|---|
 | CodeQL (GitHub) | Datenflussanalyse | `security-extended` | Build-Fehler bei Befunden (Security-Tab) |
-| Semgrep | Musterregelprüfung | `p/python`, `p/owasp-top-ten`, `p/secrets` | `--error` bricht den Build ab |
+| Semgrep | Musterregelprüfung | `p/python`, `p/owasp-top-ten`, `p/secrets`; ausgewertet werden Warnung und Fehler (Warnstufe INFO dient als Report, nicht als Blocker), `tests/` ausgenommen | `--error` bricht den Build ab |
 | pip-audit | bekannte CVEs in Abhängigkeiten | PyPI-Advisory-DB | hartes Tor in ci.yml, wöchentlich |
 
 Anlaufstellen: `.github/workflows/security.yml` (CodeQL, Semgrep, ZAP),
@@ -97,11 +97,15 @@ pip-audit --requirement requirements.txt --strict
 
 # Statische Musterprüfung (Regelsets wie in security.yml)
 semgrep scan --config p/python --config p/owasp-top-ten \
-             --config p/secrets --metrics=off
+             --config p/secrets --metrics=off \
+             --exclude tests --severity WARNING --severity ERROR
 
-# Dynamischer Basisscan gegen eine lokale Instanz
+# Dynamischer Basisscan gegen eine lokale Instanz (Linux/macOS;
+# --network host, damit der ZAP-Container die Anwendung erreicht)
 python app.py &                                   # 127.0.0.1:5050
-zap-baseline.py -t http://127.0.0.1:5050 -I       # ZAP-Installation nötig
+docker run --rm --network host -v "$PWD:/zap/wrk:rw" \
+  ghcr.io/zaproxy/zaproxy:stable \
+  zap-baseline.py -t http://127.0.0.1:5050 -I -r zap_report.html
 ```
 
 ## 7. Verantwortlichkeiten

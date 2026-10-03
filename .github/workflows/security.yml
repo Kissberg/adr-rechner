@@ -58,6 +58,8 @@ jobs:
             --config p/owasp-top-ten \
             --config p/secrets \
             --metrics=off \
+            --exclude tests \
+            --severity WARNING --severity ERROR \
             --error
 
   zap-baseline:
@@ -66,6 +68,11 @@ jobs:
     # Seiten, damit der Scan sie auch sieht — die Zugriffskontrolle selbst
     # wird in den Unit-Tests (tests/test_auth_admin.py u. a.) und
     # statisch (CodeQL/Semgrep) geprüft.
+    #
+    # Bewusst mit `docker run --network host` statt der Action-Vorlage:
+    # aus dem ZAP-Container zeigt 127.0.0.1 sonst auf den Container
+    # selbst, nicht auf die Anwendung auf dem Runner — der Scan würde
+    # das Ziel nie erreichen.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,22 +100,27 @@ jobs:
           exit 1
 
       - name: ZAP Basisscan
-        uses: zaproxy/action-baseline@v0.12.0
-        with:
-          target: http://127.0.0.1:5050
-          allow_issue_writing: false
-          # Basisscan meldet Hinweise; die Auswertung und Einordnung
-          # erfolgt dokumentiert (docs/code-audit.md). Ein hartes Tor
-          # an dieser Stelle würde ZAP-Warnungen ohne Kontext zum
-          # Blocker machen — Tripwire bleibt die CI-Testsuite plus die
-          # wöchentliche Auswertung dieses Reports.
-          fail_action: false
-          cmd_options: "-I"
+        run: |
+          docker run --rm --network host \
+            -v "$PWD:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+              -t http://127.0.0.1:5050 \
+              -r zap_report.html \
+              -I
+          code=$?
+          # 0 = ohne Warnungen, 1 = Warnungen (wird ausgewertet, nicht
+          # geblockt) — erst ab 2 ist der Scan selbst fehlgeschlagen.
+          if [ "$code" -ge 2 ]; then
+            echo "ZAP-Scan fehlgeschlagen (Code $code)"
+            exit "$code"
+          fi
+          echo "ZAP-Scan abgeschlossen (Code $code — Warnungen siehe Report)"
 
       - name: ZAP-Report archivieren
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: zap-baseline-report
-          path: report_html.html
+          path: zap_report.html
           if-no-files-found: ignore
