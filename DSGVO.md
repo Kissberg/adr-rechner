@@ -63,13 +63,23 @@ Drittanbietern aufbaut (keine Telemetrie, keine externen APIs), entsteht
 | `shipments`, `shipment_items` | Sendungen und Positionen | Ja — über die Oberfläche (Administrator) |
 | `audit_log` (SQLite) | Wer wann was geändert hat | Nur über die Aufbewahrungsfrist |
 | `exports/*.pdf` (Volume) | Beförderungspapiere mit Empfängeranschrift | Ja — beim Löschen der Sendung automatisch |
-| `users` (SQLite) | Benutzername, Passwort-Hash, Anmeldezeitpunkte | Deaktivieren statt löschen |
+| `users` (SQLite) | Benutzername, Passwort-Hash, Anmeldezeitpunkte, bei SSO zusätzlich E-Mail aus dem IdP | Deaktivieren statt löschen |
 | Backup / Volume-Snapshot | Kopie aller oben genannten Daten | Über die Backup-Aufbewahrung |
 
 **Passwörter** werden ausschließlich als scrypt-Hash gespeichert
 (`N=32768, r=8, p=1`); Klartextpasswörter existieren nur im Moment der
 Eingabe. Ein erzeugtes Anfangspasswort wird in eine nur für den Besitzer
 lesbare Datei geschrieben und beim ersten Passwortwechsel gelöscht.
+
+**Anmeldung über den Konzern-IdP (SSO, ab v4.3, optional):** Die
+Anwendung empfängt beim Anmelden die vom Identitätsanbieter freigegebenen
+Angaben (Benutzername/UPN, E-Mail, Gruppenzugehörigkeit) und speichert
+davon Benutzername, E-Mail und Rolle in `users`. Die Gruppenzugehörigkeit
+selbst wird nicht gespeichert, sondern nur für die Rollenableitung
+verwendet. Kennung und Passwort verbleiben beim IdP; das lokale Konto
+trägt keinen nutzbaren Passwort-Hash. Das Offboarding läuft zentral im
+IdP und spätestens hier wirksam (deaktivierte Konten werden bei der
+SSO-Anmeldung abgelehnt).
 
 ---
 
@@ -140,6 +150,8 @@ abhängt.
 | Erzwingung eigener Passwörter | Vom Administrator vergebene oder zurückgesetzte Passwörter müssen bei der ersten Anmeldung ersetzt werden |
 | Schutz gegen Raten | Sperre nach 10 Fehlversuchen für 15 Minuten, gezählt über den Benutzernamen (IP-Wechsel hilft nicht) |
 | Sitzungsschutz | HttpOnly, SameSite=Lax, `Secure` bei HTTPS, Sitzung endet mit dem Browser |
+| CSRF-Schutz | Ändernde Requests verlangen einen Session-Token (Formularfeld oder `X-CSRF-Token`), Rotation bei jeder Anmeldung |
+| Verschlüsselung ruhender Zugangsdaten | Postfachpasswort AES-verschlüsselt (Fernet) in der Tabelle `settings`; Schlüssel aus `SECRET_KEY`, liegt außerhalb der Datenbank |
 | Zugriffstrennung | Administratorrechte nur für Stammdatenpflege, Audit-Log und Löschvorgänge |
 | Mandantentrennung | **Eine Instanz je Niederlassung** (siehe README) — keine gemeinsame Datenhaltung |
 | Nachvollziehbarkeit | Audit-Log für Anmeldungen und Änderungen |
@@ -148,7 +160,7 @@ abhängt.
 | Betroffenenrechte | Datenauskunft als JSON je Kunde herunterladbar |
 | Erstzugang | Erster Administrator `admin`/`admin`; der Wechsel ist bei der ersten Anmeldung erzwungen und alle anderen Routen sind bis dahin gesperrt |
 | Keine Weitergabe von Passwörtern | Ein von der Anwendung erzeugtes Anfangspasswort geht per E-Mail an die betroffene Person und wird dem Administrator nicht angezeigt; ein selbst vorgegebenes übergibt er persönlich. Beide müssen bei der ersten Anmeldung ersetzt werden |
-| Zugangsdaten des Mailservers | Werden in der Anwendung gepflegt (Tabelle `settings`), sind nie in einer Antwort der Schnittstelle enthalten, stehen nicht in Umgebungsvariablen und damit nicht in `docker inspect` oder der Prozessliste |
+| Zugangsdaten des Mailservers | Werden in der Anwendung gepflegt (Tabelle `settings`), liegen dort **verschlüsselt** (ab v4.3), sind nie in einer Antwort der Schnittstelle enthalten und stehen nicht in Umgebungsvariablen — somit nicht in `docker inspect` oder der Prozessliste |
 | Fehlkonfiguration | Ein unvollständig hinterlegter Mailversand führt nicht zum Fehler: das Anfangspasswort wird einmalig angezeigt und die Einstellungen prüfen die Angaben vor dem Speichern |
 
 ### Vom Betreiber sicherzustellen

@@ -16,8 +16,8 @@ keine externen Dienste.
 > application, deployed as a single Docker container.
 
 <p align="center">
-  <img alt="Version 4.2.3" src="https://img.shields.io/badge/version-4.2.3-green">
-  <img alt="Tests: 160" src="https://img.shields.io/badge/tests-160-brightgreen">
+  <img alt="Version 4.3.0" src="https://img.shields.io/badge/version-4.3.0-green">
+  <img alt="Tests: 192" src="https://img.shields.io/badge/tests-192-brightgreen">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
   <img alt="ADR 2025" src="https://img.shields.io/badge/ADR-2025-informational">
   <img alt="Platform: Docker" src="https://img.shields.io/badge/docker-amd64%20%7C%20arm64-lightgrey">
@@ -74,6 +74,7 @@ Einzelmaßnahmen und Testzahlen stehen in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Anlass | Kern der Verbesserung |
 |---|---|---|
+| **4.3.0** | Review durch den IT-Bereich eines potenziellen Konzernbetreibers (SAST/DAST, zentrale Identitätsverwaltung, verschlüsselte Zugangsdaten, Regelbasis-Anzeige) | **CSRF-Schutz** auf allen ändernden Requests, **SSO über Microsoft Entra ID / OIDC** mit Gruppen-Rollen und zentralem Offboarding, **verschlüsseltes Postfachpasswort** (Schlüssel aus `SECRET_KEY`, Migration per `manage.py migrate-smtp-password`), **Sicherheits-CI** (CodeQL, Semgrep, ZAP, pip-audit als hartes Tor, Dependabot), **Regelbasis** auf Ergebnis und Beförderungspapier, Erstzugang abschaltbar (`ADR_BOOTSTRAP_ADMIN=0`); Vorgehensweise: [docs/code-audit.md](docs/code-audit.md) |
 | **4.2.3** | Render zeigte trotz der neuen Blueprint bisher noch die offene User-Ansicht | `render.yaml` aktiviert die Anmeldung; vollständige Admin-Oberfläche mit Benutzerverwaltung, Einstellungen und ADR-Import, Erstzugang `admin`/`admin` mit erzwungenem Passwortwechsel; Anleitung und Deployment-Dokumentation auf 4.2.3 aktualisiert |
 | **4.2.2** | Erststart mit **leerem Datenverzeichnis** brach ab: zwei Worker initialisierten die Datenbank gleichzeitig, einer verlor das Rennen um die SQLite-Sperre (`database is locked`, Exit 3) | Anwendung wird mit `--preload` geladen — `init_db()` läuft einmal im Master. Betraf jede frisch aufgesetzte Instanz, auch Test- und Hosting-Umgebungen. Dazu eine **fertige `render.yaml`** für eine öffentliche Instanz mit Anmeldung und vollem Administratorzugang (kostenloser Instanztyp) |
 | **4.2.1** | Oberfläche verwies auf eine Passwortdatei, die es seit 4.1 nicht mehr gibt | Hinweis auf der Seite *Passwort ändern* korrigiert — kein Verhalten geändert |
@@ -348,6 +349,14 @@ der Beförderungskategorie aus Tabelle A, Spalte (15).
 | `ADR_AUDIT_RETENTION_DAYS` | nein | `0` (aus) | Aufbewahrungsfrist des Audit-Logs in Tagen — siehe `DSGVO.md`. |
 | `ADR_AUDIT_LOG_IP` | nein | `1` | `0` schreibt keine IP-Adressen ins Audit-Log. |
 | `ADR_DB_DIR` / `ADR_DB_PATH` | nein | `/app/data` | Datenverzeichnis/-datei — für **mehrere Instanzen** auf einem Server. |
+| `ADR_BOOTSTRAP_ADMIN` | nein | `1` | `0` legt den dokumentierten Erstzugang nicht mehr automatisch an (Konzernbetrieb: erster Zugang kommt aus dem SSO oder aus `manage.py bootstrap-admin`). |
+| `ADR_OIDC_ENABLED` | nein | `0` | `1` aktiviert die Anmeldung über OpenID Connect / Microsoft Entra ID (siehe unten). |
+| `ADR_OIDC_ISSUER` | bei SSO | — | z. B. `https://login.microsoftonline.com/<tenant-id>/v2.0`. |
+| `ADR_OIDC_CLIENT_ID` / `ADR_OIDC_CLIENT_SECRET` | bei SSO | — | Zugangsdaten der App-Registrierung (geheimer Wert gehört in die Umgebung, nicht in die Datenbank). |
+| `ADR_OIDC_REDIRECT_URI` | nein | automatisch | Nur setzen, wenn ein Reverse Proxy die externe Adresse nicht korrekt durchreicht. |
+| `ADR_OIDC_ROLE_CLAIM` / `ADR_OIDC_ADMIN_GROUP` | nein | `groups` / leer | Gruppen-Claim und Objekt-ID der Administrator-Gruppe. Leer = SSO erzeugt keine Administratoren. |
+| `ADR_OIDC_SCOPES` | nein | `openid profile email` | Angeforderte Scopes. |
+| `ADR_OIDC_LOCAL_LOGIN` | nein | `1` | `0` = nur SSO; das Passwortformular ist dann auch per Direktaufruf nicht erreichbar. |
 | `PREFER_SECURE_COOKIE` | nein | `0` | `1` setzt `Secure` am Sitzungscookie. **Nur hinter HTTPS** — über http scheitert die Anmeldung sonst reproduzierbar. |
 | `MAX_UPLOAD_MB` | nein | `50` | Obergrenze für PDF-/Excel-Uploads. |
 | `ADR_HOST` / `ADR_PORT` | nein | `127.0.0.1`/`5050` | Nur für `python app.py`. |
@@ -362,6 +371,29 @@ der Beförderungskategorie aus Tabelle A, Spalte (15).
 | Benutzerverwaltung, Einstellungen, Audit-Log | ✓ | — |
 | UN-Datenbank bearbeiten, Datenimport, Verifikation | ✓ | — |
 | Sendungen löschen | ✓ | — |
+
+### Konzernanmeldung (SSO — Microsoft Entra ID / OpenID Connect)
+
+Die lokale Benutzerverwaltung bleibt vollständig bestehen; zusätzlich kann
+sich die Anwendung gegen einen zentralen Identitätsanbieter anmelden
+(OpenID Connect, Authorization-Code-Flow — konfiguriert für Entra ID,
+funktioniert mit jedem OIDC-konformen IdP):
+
+```bash
+-e ADR_OIDC_ENABLED=1 -e ADR_OIDC_ISSUER="https://login.microsoftonline.com/<tenant-id>/v2.0" -e ADR_OIDC_CLIENT_ID="..." -e ADR_OIDC_CLIENT_SECRET="..." -e ADR_OIDC_ADMIN_GROUP="<objekt-id-der-admin-gruppe>" -e ADR_BOOTSTRAP_ADMIN=0
+```
+
+* Konten entstehen **bei der ersten SSO-Anmeldung** (Benutzername = UPN),
+  ohne Passwort, das jemand kennen könnte.
+* Die Rolle wird — wenn `ADR_OIDC_ADMIN_GROUP` gesetzt ist — bei jeder
+  Anmeldung aus der Gruppenzugehörigkeit abgeleitet, auch nach unten
+  (Austritt aus der Admin-Gruppe wirkt bei der nächsten Anmeldung).
+* **Offboarding:** deaktivierte Konten werden beim Anmelden abgelehnt.
+  Wer die Rollen komplett zentral führen will, setzt zusätzlich
+  `ADR_OIDC_LOCAL_LOGIN=0` (kein Passwortformular mehr).
+* `/auth/logout` beendet die Session dieser Anwendung. Die Anmeldung beim
+  Identitätsanbieter (Office 365 &c.) bleibt zentral — ein Single-Logout
+  an die IdP-Sitzung ist nicht implementiert.
 
 ### Kommandozeile (im Container)
 
@@ -508,6 +540,18 @@ gemeldet) und die Prüfsummen dokumentieren. Ein eigener PDF-Parser steht als
 
 * **Jede** Route außer Anmeldung, Statik und `/healthz` verlangt eine Anmeldung;
   Schnittstellen antworten mit `401` statt mit einer Umleitung.
+* **CSRF-Schutz:** alle ändernden Requests verlangen einen Session-Token
+  (verstecktes Feld bzw. `X-CSRF-Token`-Header, konstanter Zeitvergleich,
+  Rotation bei Anmeldung) — siehe `csrf.py`.
+* Das **Postfachpasswort liegt verschlüsselt** in der Datenbank
+  (AES/Fernet, Schlüssel aus `SECRET_KEY` abgeleitet — außerhalb der DB);
+  Bestand vor 4.3 migriert `python manage.py migrate-smtp-password`.
+* **Sicherheits-CI:** CodeQL (security-extended), Semgrep
+  (OWASP Top 10/Python/Geheimnisse) und ZAP-Basisscan gegen das
+  Produktivimage, wöchentlich; `pip-audit` blockiert den Build;
+  Dependabot schlägt Updates vor. Vorgehensweise und Befunde:
+  **[docs/code-audit.md](docs/code-audit.md)**; Schwachstellenmeldungen:
+  **[SECURITY.md](SECURITY.md)**.
 * Passwörter werden ausschließlich als **scrypt-Hash** gespeichert, nie im
   Klartext und nie im Protokoll. Die Richtlinie prüft Länge (≥ 12 Zeichen),
   Sperrliste, Benutzernamen und Zeichenvielfalt.
@@ -535,6 +579,8 @@ gemeldet) und die Prüfsummen dokumentieren. Ein eigener PDF-Parser steht als
   — 37 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
   E-Mail-Einstellungen, Rechner, Beförderungspapier, Datenschutz, Betrieb.
 * [CHANGELOG.md](CHANGELOG.md) — Änderungen je Version mit Begründung
+* [docs/code-audit.md](docs/code-audit.md) — Code-Audit: SAST/DAST-Vorgehen, OWASP-Zuordnung, Befunde
+* [SECURITY.md](SECURITY.md) — Sicherheitsrichtlinie und Meldeweg
 * [DSGVO.md](DSGVO.md) — Datenschutz-Dokumentation
 * [PLAN.md](PLAN.md) — geplante Ausbaustufen
 * Abschnittstexte des ADR im Wortlaut: in der Anwendung unter *Daten &
@@ -553,7 +599,9 @@ adr-rechner/
 ├── befoerderungspapier.py  # PDF-Erzeugung nach ADR 5.4.1 (ReportLab)
 ├── adr_import.py           # ADR-PDF-Parser (PyMuPDF) — nur Verifikation
 ├── auth.py                 # Anmeldung, Rollen, Benutzer, Passwortrichtlinie
-├── settings_store.py       # Einstellungen dieser Instanz
+├── oidc_auth.py            # SSO über OpenID Connect (optional, Entra ID)
+├── csrf.py                 # CSRF-Token-Prüfung für ändernde Requests
+├── settings_store.py       # Einstellungen dieser Instanz (Passwort verschlüsselt)
 ├── mailer.py               # Mailversand (Standardbibliothek)
 ├── audit.py                # Änderungsprotokoll (append-only)
 ├── manage.py               # Kommandozeile: Benutzer, Sperren, Audit

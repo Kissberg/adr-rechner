@@ -4,8 +4,76 @@ Alle nennenswerten Änderungen dieses Projekts. Die Versionierung folgt
 `MAJOR.MINOR.PATCH`; jeder Eintrag nennt die Beweggründe, nicht nur die
 Änderung.
 
-- **Aktuelle Version:** 4.2.3 (Datenstand ADR 2025)
+- **Aktuelle Version:** 4.3.0 (Datenstand ADR 2025)
 - **Datenquelle:** Datenbank GEFAHRGUT der BAM (`dl-de/by-2-0`)
+
+---
+
+## 4.3.0 — Konzernbetrieb: CSRF, verschlüsselte Zugangsdaten, SSO, Sicherheits-CI
+
+**Anlass:** Review durch den IT-Bereich eines potenziellen
+Konzernbetreibers: statische/dynamische Code-Audits samt Vorgehensweise,
+Abkehr von der lokalen Benutzerdatenbank zugunsten zentraler
+Identitätsverwaltung (Microsoft Entra ID / OIDC), verschlüsselte Ablage
+von Zugangsdaten, Versionsanzeige der ADR-Regelbasis und Abschaltbarkeit
+des dokumentierten Erstzugangs. Diese Version setzt die technischen
+Punkte um; die Vorgehensweise ist in `docs/code-audit.md` beschrieben.
+
+### Neu
+
+- **CSRF-Schutz** (`csrf.py`, `static/js/csrf.js`): alle ändernden
+  Requests (POST/PUT/PATCH/DELETE) verlangen einen Session-Token — als
+  verstecktes Feld (Anmeldeformular) oder `X-CSRF-Token`-Header (alle
+  fetch-Aufrufe über einen zentralen Wrapper). Konstanter
+  Zeitvergleich, Rotation bei jeder Anmeldung. Unter `TESTING`
+  abgeschaltet, eigene Tests laufen mit deaktiviertem TESTING.
+- **SSO über OpenID Connect** (`oidc_auth.py`): optionale Anmeldung mit
+  Microsoft Entra ID (Authorization-Code-Flow mit Discovery; funktioniert
+  mit jedem OIDC-konformen IdP). Konten entstehen bei der ersten
+  Anmeldung, Rollen werden aus Gruppenzugehörigkeiten abgeleitet
+  (`ADR_OIDC_ADMIN_GROUP`), deaktivierte Konten werden beim Anmelden
+  abgelehnt (zentrales Offboarding). SSO-Konten erhalten einen
+  Zufalls-Hash ohne bekanntes Passwort. `ADR_OIDC_LOCAL_LOGIN=0`
+  schaltet das Passwortformular ab, `ADR_BOOTSTRAP_ADMIN=0` den
+  automatischen Erstzugang.
+- **Verschlüsselung des Postfachpassworts** (`settings_store.py`): das
+  SMTP-Passwort liegt AES-verschlüsselt (Fernet) in der
+  Einstelltabelle; der Schlüssel wird aus `SECRET_KEY` abgeleitet und
+  liegt außerhalb der Datenbank. Bestandsdaten (Klartext vor 4.3)
+  bleiben lesbar und werden mit `manage.py migrate-smtp-password`
+  verschlüsselt.
+- **Sicherheits-CI** (`.github/workflows/security.yml`): CodeQL
+  (security-extended), Semgrep (OWASP Top 10, Python, Geheimnisse),
+  ZAP-Basisscan gegen das Produktivimage, wöchentlich; pip-audit ist in
+  ci.yml jetzt ein hartes Tor; Dependabot für pip und GitHub-Actions;
+  `SECURITY.md` für koordinierte Offenlegung.
+- **Regelbasis sichtbar**: Fußzeile, Rechnerergebnis und
+  Beförderungspapier weisen den ADR-Datenstand aus (Version und
+  Importdatum der BAM-Datei). Auf dem Papier gilt die bei der Sendung
+  festgehaltene Version, nicht der aktuelle Stand.
+- `docs/code-audit.md` — Vorgehensweise und Befunde (SAST/DAST/SCA,
+  Zuordnung zu den OWASP Top 10, lokale Reproduktion).
+
+### Geändert
+
+- `APP_VERSION` = `4.3.0`; README (Umgebungsvariablen, Sicherheit,
+  SSO-Anbindung) und `DSGVO.md` (neue Datenkategorie: IdP-Kennung und
+  Gruppen bei SSO-Anmeldung) nachgezogen.
+- `audit._client_ip()` schreibt jetzt auch Einträge außerhalb eines
+  Requests (Kommandozeile, SSO-Kontoprovisionierung), statt sie still
+  fallen zu lassen.
+- Neue Abhängigkeiten (exakt gepinnt): `cryptography` (Verschlüsselung),
+  `authlib` + `requests` (SSO — nur beim Start mit
+  `ADR_OIDC_ENABLED=1` zwingend benötigt).
+- Testsuite erweitert (CSRF, Verschlüsselung, SSO, Bootstrap-Schalter,
+  Regelbasis im PDF).
+
+### Upgrade
+
+- Bestandsinstallationen: Container neu bauen und starten; danach
+  einmalig `python manage.py migrate-smtp-password` ausführen. Ohne
+  gesetzten `SECRET_KEY` bleibt das Postfachpasswort nach einem
+  Neustart unlesbar — der Betrieb warnt beim Speichern.
 
 ---
 
