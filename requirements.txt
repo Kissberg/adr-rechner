@@ -17,4 +17,4 @@ PyMuPDF==1.27.2.2
 # jedoch bewusst nicht, wenn authlib fehlt (siehe oidc_auth.configure_oidc).
 cryptography==45.0.7
 authlib==1.6.5
-requests==2.32.5
+requests==2.34.2
