@@ -129,6 +129,13 @@ def configure_oidc(app) -> None:
 
 
 def _redirect_uri() -> str:
+    # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
+    # `_external=True` leitet sich aus dem Host-Header ab. Im
+    # Konzernbetrieb wird ADR_OIDC_REDIRECT_URI gesetzt (dann greift der
+    # obige Wert) — und der Identitätsanbieter akzeptiert ohnehin nur
+    # Redirect-URIs, die in der App-Registrierung eingetragen sind;
+    # ein manipulierter Host führt zu einer Ablehnung dort, nicht zu
+    # einer Umleitung auf Angreiferseite.
     return (os.environ.get("ADR_OIDC_REDIRECT_URI") or "").strip() \
         or url_for("oidc.callback", _external=True)
 
