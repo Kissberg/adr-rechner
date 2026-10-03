@@ -19,6 +19,7 @@ Aufruf (Docker):
     docker exec -it adr-rechner python manage.py delete-user muenchen01
     docker exec -it adr-rechner python manage.py unlock admin
     docker exec -it adr-rechner python manage.py purge-audit --days 3650
+    docker exec -it adr-rechner python manage.py migrate-smtp-password
 
 Ein zurückgesetztes Passwort muss bei der nächsten Anmeldung geändert
 werden. Das Passwort wird nie ins Log geschrieben.
@@ -47,6 +48,7 @@ from database import get_db
 import auth
 import audit
 import mailer
+import settings_store
 
 
 def _fail(message: str, code: int = 1) -> "NoReturn":
@@ -383,6 +385,49 @@ def cmd_hash_password(args) -> int:
     return 0
 
 
+def cmd_migrate_smtp_password(_args) -> int:
+    """Verschlüsselt ein in Klartext liegendes Postfachpasswort.
+
+    Bestandsmigration für Installationen vor v4.3: das Passwort bleibt
+    funktionsfähig (der Versand läuft unverändert weiter), wird aber aus
+    dem Klartext in die verschlüsselte Ablage überführt. Bei bereits
+    verschlüsseltem Passwort passiert nichts.
+    """
+    if settings_store.smtp_password_is_encrypted():
+        print("Das Postfachpasswort liegt bereits verschlüsselt vor. "
+              "Nichts zu tun.")
+        return 0
+
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'smtp_password'"
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row or not row["value"]:
+        print("Kein Postfachpasswort hinterlegt — nichts zu tun.")
+        return 0
+
+    klartext = settings_store.decrypt_secret(row["value"])
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE settings SET value = ?, updated_at = ? "
+            "WHERE key = 'smtp_password'",
+            (settings_store.encrypt_secret(klartext),
+             datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    audit.log(audit.UPDATE, "settings", None,
+              "Postfachpasswort verschlüsselt (Bestandsmigration v4.3)")
+    print("Das Postfachpasswort ist jetzt verschlüsselt hinterlegt.")
+    return 0
+
+
 def cmd_check(_args) -> int:
     """Prüft, ob Zugang zur Datenbank besteht und wie der Bestand aussieht."""
     print(f"Datenverzeichnis: {database.DB_DIR}")
@@ -466,6 +511,10 @@ def main() -> int:
     p = sub.add_parser("hash-password", help="Hash für Sonderfälle erzeugen")
     p.add_argument("password")
     p.set_defaults(func=cmd_hash_password)
+
+    p = sub.add_parser("migrate-smtp-password",
+                       help="Postfachpasswort verschlüsseln (Bestand vor v4.3)")
+    p.set_defaults(func=cmd_migrate_smtp_password)
 
     p = sub.add_parser("check", help="Zugang und Datenbestand prüfen")
     p.set_defaults(func=cmd_check)

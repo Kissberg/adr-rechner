@@ -37,11 +37,13 @@ from adr_rules import (
     TRANSPORT_FORM_PACKAGE,
 )
 import audit
+import csrf as csrf_module
 from auth import (
     auth_bp, users_bp, auth_enabled, current_user, ensure_default_admin,
     login_required, role_required, ROLE_ADMIN, ROLE_USER,
     PASSWORD_MIN_LENGTH,
 )
+from oidc_auth import oidc_bp, configure_oidc, oidc_enabled
 
 app = Flask(__name__)
 
@@ -66,6 +68,8 @@ app.config.update(
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(users_bp)
+app.register_blueprint(oidc_bp)
+configure_oidc(app)
 
 # ----------------------------------------------------------------
 # Datenbank-Initialisierung beim ersten Start
@@ -114,7 +118,11 @@ if _AUDIT_RETENTION_DAYS > 0:
 # ----------------------------------------------------------------
 # Zugriffsschutz für alle Routen (außer Anmeldung, Statik, Healthcheck)
 # ----------------------------------------------------------------
-PUBLIC_ENDPOINTS = {"auth.login", "auth.logout", "static", "healthz"}
+PUBLIC_ENDPOINTS = {"auth.login", "auth.logout", "static", "healthz",
+                    # SSO-Flow: der Browser kommt unangemeldet vom
+                    # Identitätsanbieter zurück — ohne diese Freigabe
+                    # würde der Schutz vor der Anwendung stehen.
+                    "oidc.login", "oidc.callback"}
 
 # Erreichbar, solange ein Passwortwechsel aussteht — sonst käme man aus der
 # erzwungenen Änderung nicht mehr heraus.
@@ -150,6 +158,22 @@ def _require_login():
     return None
 
 
+@app.before_request
+def _require_csrf_token():
+    """Weist ändernde Anfragen ohne gültigen CSRF-Token ab (siehe csrf.py)."""
+    if app.config.get("TESTING"):
+        return None
+    problem = csrf_module.check_csrf()
+    if problem is None:
+        return None
+    meldung, status = problem
+    if request.path.startswith("/api/") or request.is_json \
+            or request.accept_mimetypes.best == "application/json":
+        return jsonify({"error": meldung}), status
+    return render_template("error.html", title=f"{status} — Anfrage abgelehnt",
+                           error_code=status, error_message=meldung), status
+
+
 @app.context_processor
 def _inject_user():
     """Stellt Benutzer- und Versionsdaten in allen Templates bereit."""
@@ -158,13 +182,39 @@ def _inject_user():
         "app_version": APP_VERSION,
         "auth_enabled": auth_enabled(),
         "min_password_length": PASSWORD_MIN_LENGTH,
+        "csrf_token": csrf_module.csrf_token,
+        "oidc_enabled": oidc_enabled(),
+        "oidc_local_login": _oidc_local_login(),
+        "regelbasis": _regelbasis_fallback(),
     }
+
+
+def _oidc_local_login() -> bool:
+    """Ob neben dem SSO auch die Passwort-Anmeldung erreichbar bleibt."""
+    from oidc_auth import local_login_enabled
+    return local_login_enabled()
+
+
+def _regelbasis_fallback():
+    """Regelbasis für die Fußzeile — auch bei defekter Datenbank statisch."""
+    try:
+        from adr_import import get_current_regelbasis
+        basis = get_current_regelbasis()
+        return basis or {"version": "ADR 2025", "import_date": None}
+    except Exception:
+        return {"version": "ADR 2025", "import_date": None}
+
+
+def latest_adr_version() -> str:
+    """Der tatsächlich importierte Datenstand (z. B. „ADR 2025")."""
+    basis = _regelbasis_fallback()
+    return basis.get("version") or "ADR 2025"
 
 
 # ----------------------------------------------------------------
 # Hilfsfunktionen
 # ----------------------------------------------------------------
-APP_VERSION = "4.2.3"
+APP_VERSION = "4.3.0"
 
 
 def get_db_conn():
@@ -563,6 +613,13 @@ def calculate():
     payload["shipment_id"] = shipment_id
     payload["transport_form_label"] = TRANSPORT_FORM_LABELS.get(
         transport_form, transport_form)
+    # Rechtsgrund der Prüfung mitliefern — die Oberfläche zeigt ihn am
+    # Ergebnis an, damit jede Berechnung ihrem Datenstand zugeordnet
+    # werden kann (Forderung aus dem Konzern-Review).
+    payload["regelbasis"] = {
+        "version": latest_adr_version(),
+        "import_date": _regelbasis_fallback().get("import_date"),
+    }
     if shipment_id:
         payload["redirect"] = url_for("view_transport_document", id=shipment_id)
     return jsonify(payload)
