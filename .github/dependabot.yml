@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Exakt gepinnte Versionen (siehe requirements.txt) werden hier
+    # vorgeschlagen, sobald Updates oder Sicherheitsfixes vorliegen —
+    # der Pull-Request ist der Review-Auslöser, nicht ein stiller Build.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
