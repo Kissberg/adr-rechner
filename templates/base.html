@@ -18,6 +18,9 @@
     <!-- Eigenes CSS -->
     <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
 
+    <!-- CSRF-Token für alle fetch-Aufrufe (siehe static/js/csrf.js, csrf.py) -->
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+
     {% block extra_head %}{% endblock %}
 </head>
 <body>
@@ -141,7 +144,11 @@
                 </div>
                 <div class="col-md-6 text-md-end">
                     <p class="text-muted small mb-1">
-                        ADR 2025 &bull; Version {{ app_version }}
+                        Regelbasis: {{ regelbasis.version if regelbasis and regelbasis.version else 'ADR 2025' }}
+                        {% if regelbasis and regelbasis.import_date %}
+                        &bull; Datenstand {{ regelbasis.import_date[:10] }}
+                        {% endif %}
+                        &bull; Version {{ app_version }}
                     </p>
                     <p class="text-muted small mb-0">
                         Keine Rechtsberatung &mdash; Nur für Referenzzwecke.
@@ -228,6 +235,10 @@
             integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
             crossorigin="anonymous">
     </script>
+
+    <!-- CSRF-Wrapper: vor allen Seiten-Skripten laden, damit deren
+         fetch-Aufrufe bereits den Token mitliefern. -->
+    <script src="{{ url_for('static', filename='js/csrf.js') }}"></script>
 
     {% block extra_scripts %}{% endblock %}
 </body>

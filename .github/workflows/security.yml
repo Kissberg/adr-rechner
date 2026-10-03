@@ -1,0 +1,114 @@
+name: Security
+
+# Sicherheitsprüfungen als fester Teil des Builds (SAST/DAST/SCA).
+# Vorgehensweise und Auswertung: docs/code-audit.md
+#
+#   • codeql    — statische Analyse (Semantik-Ebene, Datenfluss)
+#   • semgrep   — regelbasierte Muster (OWASP Top 10, Geheimnisse, Python)
+#   • zap       — dynamischer Basisscan gegen die laufende Anwendung
+#   • (pip-audit läuft in ci.yml und ist dort ein hartes Tor)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Wöchentlich Montag 06:00 UTC — auch ohne Änderungen laufen lassen,
+    # damit neue Erkennungsregeln und CVEs sichtbar werden.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    permissions:
+      security-events: write   # Ergebnisse ins Security-Tab schreiben
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CodeQL initialisieren
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: CodeQL analysieren
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:python"
+
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Semgrep (OWASP Top 10, Python, Geheimnisse)
+        run: |
+          semgrep scan \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --config p/secrets \
+            --metrics=off \
+            --error
+
+  zap-baseline:
+    # Dynamischer Basisscan (passiv + wenige aktive Prüfungen) gegen die
+    # laufende Anwendung. Ohne Anmeldung: AUTH_ENABLED=0 öffnet alle
+    # Seiten, damit der Scan sie auch sieht — die Zugriffskontrolle selbst
+    # wird in den Unit-Tests (tests/test_auth_admin.py u. a.) und
+    # statisch (CodeQL/Semgrep) geprüft.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image bauen
+        run: docker build -t adr-rechner:dast .
+
+      - name: Anwendung starten
+        run: |
+          docker run -d --name adr-dast \
+            -p 5050:5050 \
+            -e SECRET_KEY=dast-secret-key \
+            -e AUTH_ENABLED=0 \
+            -e ADR_BOOTSTRAP_ADMIN=0 \
+            adr-rechner:dast
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5050/healthz; then
+              echo "Healthcheck erfolgreich"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Anwendung nicht erreichbar"
+          docker logs adr-dast
+          exit 1
+
+      - name: ZAP Basisscan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: http://127.0.0.1:5050
+          allow_issue_writing: false
+          # Basisscan meldet Hinweise; die Auswertung und Einordnung
+          # erfolgt dokumentiert (docs/code-audit.md). Ein hartes Tor
+          # an dieser Stelle würde ZAP-Warnungen ohne Kontext zum
+          # Blocker machen — Tripwire bleibt die CI-Testsuite plus die
+          # wöchentliche Auswertung dieses Reports.
+          fail_action: false
+          cmd_options: "-I"
+
+      - name: ZAP-Report archivieren
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-baseline-report
+          path: report_html.html
+          if-no-files-found: ignore

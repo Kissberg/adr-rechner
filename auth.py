@@ -193,6 +193,19 @@ def auth_enabled() -> bool:
     return os.environ.get("AUTH_ENABLED", "1").strip().lower() not in ("0", "false", "no")
 
 
+def bootstrap_admin_enabled() -> bool:
+    """Ob der dokumentierte Erstzugang automatisch angelegt werden darf.
+
+    Im Konzernbetrieb wird er üblicherweise abgeschaltet
+    (ADR_BOOTSTRAP_ADMIN=0): dort stellt der Identitätsanbieter (SSO)
+    oder `manage.py bootstrap-admin` den ersten Zugang — ein Konto mit
+    einem öffentlich dokumentierten Passwort wäre ein Prüfungsbefund,
+    selbst wenn der Wechsel erzwungen würde.
+    """
+    return os.environ.get("ADR_BOOTSTRAP_ADMIN", "1").strip().lower() \
+        not in ("0", "false", "no")
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Benutzerverwaltung
 # ─────────────────────────────────────────────────────────────────────
@@ -225,7 +238,17 @@ def ensure_default_admin() -> None:
     an rowcount == 0, dass ein anderer Worker den Benutzer angelegt hat.
 
     Ein bereits vorhandener Benutzer wird niemals überschrieben.
+
+    Mit ADR_BOOTSTRAP_ADMIN=0 entfällt dieser Automatismus vollständig —
+    für den Konzernbetrieb mit SSO (siehe oidc_auth.py) oder wenn der
+    erste Zugang bewusst über `manage.py bootstrap-admin` erfolgen soll.
     """
+    if not bootstrap_admin_enabled():
+        print("[bootstrap] ADR_BOOTSTRAP_ADMIN=0 — kein automatischer "
+              "Erstzugang. Ersten Zugang über SSO oder "
+              "`manage.py bootstrap-admin` anlegen.")
+        return
+
     username = (os.environ.get("ADR_ADMIN_USER") or "").strip() \
         or BOOTSTRAP_ADMIN_USER
     password = (os.environ.get("ADR_ADMIN_PASSWORD") or "").strip()
@@ -367,6 +390,15 @@ def login():
         session["user_id"] = 0
         session["username"] = "local"
         return redirect(url_for("index"))
+
+    from oidc_auth import local_login_enabled
+    if request.method == "POST" and not local_login_enabled():
+        # SSO-only-Betrieb: das Passwortformular ist gar nicht erst
+        # sichtbar — ein direkt adressierter POST ist dann kein
+        # Anmeldeweg mehr und wird wie eine nicht vorhandene Seite
+        # behandelt.
+        from flask import abort
+        abort(404)
 
     error = None
     if request.method == "POST":

@@ -59,10 +59,15 @@ def _log_ip_enabled() -> bool:
 
 
 def _client_ip() -> str:
-    """Ermittelt die Client-IP (ohne Vertrauen in X-Forwarded-For)."""
-    if not _log_ip_enabled():
+    """Ermittelt die Client-IP (ohne Vertrauen in X-Forwarded-For).
+
+    Ohne Request-Kontext (manage.py, SSO-Kontoprovisionierung) gibt es
+    keine IP — der Eintrag selbst darf dadurch nicht verloren gehen.
+    """
+    from flask import has_request_context
+    if not _log_ip_enabled() or not has_request_context():
         return ""
-    return request.remote_addr or "" if request else ""
+    return request.remote_addr or ""
 
 
 def log(

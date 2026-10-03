@@ -820,6 +820,27 @@ def get_version_history() -> List[dict]:
     return [dict(r) for r in rows]
 
 
+def get_current_regelbasis() -> Optional[dict]:
+    """Der Datenstand, auf dem aktuell gerechnet wird.
+
+    Wird in der Fußzeile jeder Seite, am Berechnungsergebnis und auf dem
+    Beförderungspapier angezeigt — eine Berechnung ist nur mit dem
+    Hinweis auf ihren rechtlichen Bezugspunkt verwertbar (wer hat mit
+    welchem Stand gerechnet?). Beim Speichern wird die Version überdies
+    je Sendung festgehalten; dieses Feld sagt, was **jetzt** in der
+    Datenbank liegt.
+    """
+    db = get_db()
+    try:
+        row = db.execute(
+            "SELECT version, import_date FROM adr_versions "
+            "ORDER BY import_date DESC, id DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        db.close()
+    return dict(row) if row else None
+
+
 def get_last_scan_history(limit: int = 20) -> List[dict]:
     """Verlauf der Vorschriftenprüfungen (Prüfsummen je Abschnitt)."""
     db = get_db()

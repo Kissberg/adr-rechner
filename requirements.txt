@@ -10,3 +10,11 @@ gunicorn==26.2.0
 reportlab==5.0.0
 openpyxl==3.1.5
 PyMuPDF==1.27.2.2
+# Verschlüsselung ruhender Zugangsdaten (SMTP-Passwort in der
+# Einstelltabelle) und JWT-Prüfung beim SSO (oidc_auth.py). Beides ist
+# im Kern OPTIONAL: ohne SSO und ohne gespeichertes Passwort läuft die
+# Anwendung auch ohne diese Pakete — mit ADR_OIDC_ENABLED=1 startet sie
+# jedoch bewusst nicht, wenn authlib fehlt (siehe oidc_auth.configure_oidc).
+cryptography==45.0.7
+authlib==1.6.5
+requests==2.32.5

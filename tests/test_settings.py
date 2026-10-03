@@ -42,6 +42,10 @@ def client(monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", f"{tmp}/adr-test.db")
     monkeypatch.setenv("ADR_ADMIN_USER", "admin")
     monkeypatch.setenv("ADR_ADMIN_PASSWORD", ADMIN_PW)
+    # Seit v4.3 wird das Postfachpasswort mit einem aus SECRET_KEY
+    # abgeleiteten Schlüssel verschlüsselt — Speichern und Lesen müssen
+    # denselben Schlüssel verwenden.
+    monkeypatch.setenv("SECRET_KEY", "test-key")
     database.init_db()
     auth.ensure_default_admin()
 
@@ -126,7 +130,10 @@ def test_speichern_und_wieder_auslesen_ohne_passwort(client):
     assert "Postfach-Geheim-2026" not in res.get_data(as_text=True)
 
     gespeichert = _rows("SELECT value FROM settings WHERE key = 'smtp_password'")
-    assert gespeichert[0]["value"] == "Postfach-Geheim-2026"
+    # Seit v4.3 liegt das Passwort verschlüsselt in der Datenbank —
+    # der Klartext taucht in keinem Feld auf.
+    assert gespeichert[0]["value"].startswith("enc1:")
+    assert "Postfach-Geheim-2026" not in gespeichert[0]["value"]
 
 
 def test_passwort_bleibt_bei_leerem_feld_erhalten(client):

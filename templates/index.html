@@ -133,6 +133,12 @@
                     <div class="small text-muted">
                         Freigrenze: 1.000 Punkte gemäß ADR 1.1.3.6
                     </div>
+                    <div class="small text-muted mt-1">
+                        Regelbasis: {{ (regelbasis.version if regelbasis and regelbasis.version else 'ADR 2025') }}
+                        {% if regelbasis and regelbasis.import_date %}
+                        — UN-Datenstand vom {{ regelbasis.import_date[:10] }}
+                        {% endif %}
+                    </div>
                 </div>
             </div>
         </div>

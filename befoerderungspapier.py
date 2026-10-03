@@ -258,6 +258,22 @@ def generate_befoerderungspapier(shipment_id):
         (shipment["shipping_address_id"],),
     ).fetchone()
 
+    # Regelbasis (siehe unten am Dokument): Importdatum der ADR-Version,
+    # mit der diese Sendung geprüft wurde.
+    regelbasis_importdatum = None
+    adr_version_basis = (shipment["adr_version"] if "adr_version"
+                         in shipment.keys() else None) or ""
+    if adr_version_basis:
+        basis = db.execute(
+            "SELECT import_date FROM adr_versions WHERE version = ? "
+            "ORDER BY import_date DESC LIMIT 1",
+            (adr_version_basis,),
+        ).fetchone()
+        if basis and basis["import_date"]:
+            regelbasis_importdatum = str(basis["import_date"])[:10]
+    if not adr_version_basis:
+        adr_version_basis = "ADR 2025"
+
     db.close()
 
     # ── 2. Prepare output path ─────────────────────────────────────────
@@ -529,6 +545,28 @@ def generate_befoerderungspapier(shipment_id):
             total_style,
         )
     )
+
+    # ── 3e'. Regelbasis ausweisen ──────────────────────────────────────
+    # Rechtsnachweis: auf welchem Datenstand beruht diese Prüfung? Die
+    # Version wird bei der Sendungsanlage festgehalten; das Importdatum
+    # ergänzt sie um den Zeitpunkt der Übernahme aus der amtlichen
+    # BAM-Datei (Datenbank GEFAHRGUT).
+    adr_version_basis = (shipment["adr_version"] if "adr_version"
+                         in shipment.keys() else None) or "ADR 2025"
+    regelbasis_text = f"Regelbasis: {adr_version_basis}"
+    if regelbasis_importdatum:
+        regelbasis_text += f", importiert am {regelbasis_importdatum}"
+    regelbasis_text += (" (UN-Datenbank GEFAHRGUT, Bundesanstalt für "
+                        "Materialforschung und -prüfung)")
+    regelbasis_style = ParagraphStyle(
+        "ADR_Regelbasis",
+        fontName="Helvetica",
+        fontSize=7.5,
+        textColor=HexColor("#555555"),
+        spaceBefore=2,
+    )
+    story.append(Paragraph(regelbasis_text, regelbasis_style))
+
     story.append(Spacer(1, 0.5 * cm))
 
     # ── 3f. Declaration (i) — Wortlaut nach ADR 5.4.1.1 (i) ────────────
@@ -596,7 +634,8 @@ def generate_befoerderungspapier(shipment_id):
             2 * cm,
             0.6 * cm,
             f"{doc_number or ('Sendung #' + str(shipment_id))}  •  "
-            f"erstellt am {today_str}  •  ADR 1000-Punkte-Rechner",
+            f"erstellt am {today_str}  •  {adr_version_basis}  •  "
+            f"ADR 1000-Punkte-Rechner",
         )
         canvas.restoreState()
 
