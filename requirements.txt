@@ -15,6 +15,6 @@ PyMuPDF==1.27.2.2
 # im Kern OPTIONAL: ohne SSO und ohne gespeichertes Passwort läuft die
 # Anwendung auch ohne diese Pakete — mit ADR_OIDC_ENABLED=1 startet sie
 # jedoch bewusst nicht, wenn authlib fehlt (siehe oidc_auth.configure_oidc).
-cryptography==45.0.7
+cryptography==50.0.2
 authlib==1.6.5
 requests==2.32.5
