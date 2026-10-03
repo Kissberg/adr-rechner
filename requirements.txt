@@ -16,5 +16,5 @@ PyMuPDF==1.27.2.2
 # Anwendung auch ohne diese Pakete — mit ADR_OIDC_ENABLED=1 startet sie
 # jedoch bewusst nicht, wenn authlib fehlt (siehe oidc_auth.configure_oidc).
 cryptography==50.0.2
-authlib==1.6.12
+authlib==1.8.0
 requests==2.34.2
