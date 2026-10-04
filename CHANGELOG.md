@@ -4,17 +4,30 @@ Alle nennenswerten Änderungen dieses Projekts. Die Versionierung folgt
 `MAJOR.MINOR.PATCH`; jeder Eintrag nennt die Beweggründe, nicht nur die
 Änderung.
 
-- **Aktuelle Version:** 4.3.0 (Datenstand ADR 2025)
+- **Aktuelle Version:** 4.3.1 (Datenstand ADR 2025)
 - **Datenquelle:** Datenbank GEFAHRGUT der BAM (`dl-de/by-2-0`)
 
 ---
 
-## 4.3.0 — Konzernbetrieb: CSRF, verschlüsselte Zugangsdaten, SSO, Sicherheits-CI
+## 4.3.1 — Neutrale Formulierungen in Quelltext und Dokumentation
 
-**Anlass:** Review durch den IT-Bereich eines potenziellen
-Konzernbetreibers: statische/dynamische Code-Audits samt Vorgehensweise,
-Abkehr von der lokalen Benutzerdatenbank zugunsten zentraler
-Identitätsverwaltung (Microsoft Entra ID / OIDC), verschlüsselte Ablage
+**Anlass:** Ein MIT-lizenziertes Open-Source-Projekt nennt seine
+Beweggründe neutral — ohne Bezug auf den IT-Bereich eines konkreten,
+potenziellen Betreibers. Formulierungen, die die 4.3.0-Härtung auf ein
+solches Review bezogen (README-Versionshistorie, CHANGELOG-Anlass,
+Kommentare in `app.py`/`tests/`, `docs/code-audit.md`,
+`docs/freigabe-testprotokoll.md`, `DSGVO.md`, Bedienungsanleitung),
+wurden umformuliert; der Titel des 4.3.0-Abschnitts wurde angepasst.
+**Keine Funktionsänderung** — die Anwendung verhält sich exakt wie 4.3.0;
+`APP_VERSION` wurde dennoch auf 4.3.1 gehoben, damit Image,
+Healthcheck und Anleitung weiterhin eindeutig zusammenpassen.
+
+## 4.3.0 — Härtung für größere Organisationen: CSRF, verschlüsselte Zugangsdaten, SSO, Sicherheits-CI
+
+**Anlass:** Härtung für den Einsatz in größeren Organisationen:
+statische/dynamische Code-Audits samt dokumentierter Vorgehensweise,
+Unterstützung zentraler Identitätsverwaltung (Microsoft Entra ID / OIDC)
+neben der lokalen Benutzerdatenbank, verschlüsselte Ablage
 von Zugangsdaten, Versionsanzeige der ADR-Regelbasis und Abschaltbarkeit
 des dokumentierten Erstzugangs. Diese Version setzt die technischen
 Punkte um; die Vorgehensweise ist in `docs/code-audit.md` beschrieben.

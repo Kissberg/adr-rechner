@@ -55,7 +55,7 @@ ZAP-Basisscan gegen die in CI gebaute Container-Instanz
   Warnungen werden je Release bewertet und — wenn sie zutreffen — als
   Issue aufgenommen. Ein authentifizierter Scan (ZAP-Authentifizierung
   über den Anmelde-Flow) ist vorgesehen und im Security-Workflow
-  nachziehbar, sobald der Konzern-Zielbetrieb feststeht.
+  nachziehbar, sobald der konkrete Zielbetrieb feststeht.
 
 ## 4. Zuordnung zu den OWASP Top 10 (2021)
 
@@ -65,7 +65,7 @@ ZAP-Basisscan gegen die in CI gebaute Container-Instanz
 | A02 Cryptographic Failures | Passwörter als scrypt-Hash (Werkzeug, automatisch salted); Postfachpasswort AES-verschlüsselt in der Datenbank (Fernet, Schlüssel aus `SECRET_KEY` abgeleitet, liegt außerhalb der DB — siehe `settings_store.py`); TLS wird über Reverse Proxy geführt, `SESSION_COOKIE_SECURE` per `PREFER_SECURE_COOKIE=1` |
 | A03 Injection | SQL ausschließlich parameterisiert (Platzhalter `?`; die wenigen f-String-SQLs interpolieren nur intern gebildete Klauseln, Werte gebunden); Templates nutzen Jinja2-Autoescaping, `|safe` wird nicht verwendet; **CSRF-Token** auf allen ändernden Requests (Formularfeld + `X-CSRF-Token`, konstanter Zeitvergleich, Rotation bei Anmeldung — siehe `csrf.py`, `static/js/csrf.js`) |
 | A04 Insecure Design | Berechnungslogik isoliert und testbar (`adr_rules.py`, 160+ Unit-Tests); Fail-safe: mehrdeutige Varianten führen zu einer **Ablehnung** statt zu einer Schätzung; ADR-Import mit Strukturprüfung und unabhängiger Verifikation gegen das amtliche PDF; Regelbasis wird je Berechnung/Sendung festgehalten und im Dokument ausgewiesen |
-| A05 Security Misconfiguration | Container läuft unprivilegiert (uid 10001); Debug aus; Gunicorn hinter Reverse Proxy; Bootstrap-Konto `admin/admin` nur bis zur erzwungenen Erstanmeldung und per `ADR_BOOTSTRAP_ADMIN=0` abschaltbar (Konzernbetrieb mit SSO setzt genau das); kein Secret im Image oder im Audit-Log |
+| A05 Security Misconfiguration | Container läuft unprivilegiert (uid 10001); Debug aus; Gunicorn hinter Reverse Proxy; Bootstrap-Konto `admin/admin` nur bis zur erzwungenen Erstanmeldung und per `ADR_BOOTSTRAP_ADMIN=0` abschaltbar (ein SSO-Betrieb setzt genau das); kein Secret im Image oder im Audit-Log |
 | A06 Vulnerable Components | pip-audit als hartes Tor, Dependabot wöchentlich, exakte Pins; GitHub-Actions auf Commit-SHA gepinnt (Lieferkettenschutz), Updates ebenfalls über Dependabot |
 | A07 Identification & Authentication Failures | Kontosperrung nach Fehlversuchen (benutzerbezogen, umgeht keine IP-Wechsel); Passwortrichtlinie an BSI TR-02102-1 / NIST SP 800-63B angelehnt (Länge statt Zeichenklassen, Sperrliste, kein Benutzername); erzwungener Passwortwechsel bei fremdvergebenen Passwörtern; optionale **SSO-Anbindung (OIDC / Microsoft Entra ID)** mit zentraler Rollenableitung und Offboarding-Wirkung (`oidc_auth.py`) |
 | A08 Software & Data Integrity | Uploads nur mit erlaubten Endungen, Größenlimit (50 MB), BAM-Import mit Prüfung vor dem Schreiben; ADR-PDF-Vorschriftenabschnitte per Prüfsumme überwacht (`adr_section_scans`) |
@@ -78,7 +78,7 @@ ZAP-Basisscan gegen die in CI gebaute Container-Instanz
   Header Not Set"): Bootstrap und eigene Skripte laden von CDN;
   eine CSP erfordert Nonce-/Hash-Pflege in allen Templates. Bewertet als
   akzeptiertes Restrisiko für den Intranetbetrieb hinter Reverse Proxy;
-  im Konzernkontext empfiehlt sich die CSP auf Proxy-Ebene.
+  in größeren Umgebungen empfiehlt sich die CSP auf Proxy-Ebene.
 * **Kein authentifizierter DAST-Scan** in CI (siehe Abschnitt 3) —
   dokumentiert, nicht verschwiegen.
 * Fehlende CSRF-Tokens vor v4.3 sind in v4.3 geschlossen; Bestands-
@@ -112,7 +112,7 @@ docker run --rm --network host -v "$PWD:/zap/wrk:rw" \
 
 * **Autor**: pflegt Scans, reagiert auf Findings (Fix oder dokumentierte
   Bewertung in Abschnitt 5), hält dieses Dokument stand.
-* **Betreibende Instanz** (Konzern): bestätigt Umgebung (TLS, Reverse
+* **Betreibende Instanz**: bestätigt Umgebung (TLS, Reverse
   Proxy, `SECRET_KEY`, `PREFER_SECURE_COOKIE=1`, `ADR_BOOTSTRAP_ADMIN=0`,
   OIDC-Konfiguration) und nimmt die formale Freigabe der
   Berechnungslogik vor — technisch unterstützt durch die Testsuite

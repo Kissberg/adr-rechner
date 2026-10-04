@@ -196,7 +196,7 @@ def auth_enabled() -> bool:
 def bootstrap_admin_enabled() -> bool:
     """Ob der dokumentierte Erstzugang automatisch angelegt werden darf.
 
-    Im Konzernbetrieb wird er üblicherweise abgeschaltet
+    Im Unternehmensbetrieb wird er üblicherweise abgeschaltet
     (ADR_BOOTSTRAP_ADMIN=0): dort stellt der Identitätsanbieter (SSO)
     oder `manage.py bootstrap-admin` den ersten Zugang — ein Konto mit
     einem öffentlich dokumentierten Passwort wäre ein Prüfungsbefund,
@@ -240,7 +240,7 @@ def ensure_default_admin() -> None:
     Ein bereits vorhandener Benutzer wird niemals überschrieben.
 
     Mit ADR_BOOTSTRAP_ADMIN=0 entfällt dieser Automatismus vollständig —
-    für den Konzernbetrieb mit SSO (siehe oidc_auth.py) oder wenn der
+    für den Unternehmensbetrieb mit SSO (siehe oidc_auth.py) oder wenn der
     erste Zugang bewusst über `manage.py bootstrap-admin` erfolgen soll.
     """
     if not bootstrap_admin_enabled():

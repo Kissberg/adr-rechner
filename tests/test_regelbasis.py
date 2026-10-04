@@ -1,7 +1,6 @@
 """
-Tests der Regelbasis-Anzeige (Forderung aus dem Konzern-Review: das Tool
-muss nachvollziehen lassen, auf welchem rechtlichen Stand gerechnet
-wurde).
+Tests der Regelbasis-Anzeige (das Tool muss nachvollziehen lassen, auf
+welchem rechtlichen Stand gerechnet wurde).
 
 Geprüft: der aktuelle Datenstand für die Oberfläche (Fußzeile, Rechner)
 und die bei der Sendung festgehaltene Basis auf dem Beförderungspapier-PDF

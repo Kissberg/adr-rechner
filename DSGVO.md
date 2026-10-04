@@ -71,7 +71,7 @@ Drittanbietern aufbaut (keine Telemetrie, keine externen APIs), entsteht
 Eingabe. Ein erzeugtes Anfangspasswort wird in eine nur für den Besitzer
 lesbare Datei geschrieben und beim ersten Passwortwechsel gelöscht.
 
-**Anmeldung über den Konzern-IdP (SSO, ab v4.3, optional):** Die
+**Anmeldung über einen zentralen Unternehmens-IdP (SSO, ab v4.3, optional):** Die
 Anwendung empfängt beim Anmelden die vom Identitätsanbieter freigegebenen
 Angaben (Benutzername/UPN, E-Mail, Gruppenzugehörigkeit) und speichert
 davon Benutzername, E-Mail und Rolle in `users`. Die Gruppenzugehörigkeit

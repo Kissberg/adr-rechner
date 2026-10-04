@@ -16,7 +16,7 @@ keine externen Dienste.
 > application, deployed as a single Docker container.
 
 <p align="center">
-  <img alt="Version 4.3.0" src="https://img.shields.io/badge/version-4.3.0-green">
+  <img alt="Version 4.3.1" src="https://img.shields.io/badge/version-4.3.1-green">
   <img alt="Tests: 192" src="https://img.shields.io/badge/tests-192-brightgreen">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
   <img alt="ADR 2025" src="https://img.shields.io/badge/ADR-2025-informational">
@@ -74,7 +74,8 @@ Einzelmaßnahmen und Testzahlen stehen in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Anlass | Kern der Verbesserung |
 |---|---|---|
-| **4.3.0** | Review durch den IT-Bereich eines potenziellen Konzernbetreibers (SAST/DAST, zentrale Identitätsverwaltung, verschlüsselte Zugangsdaten, Regelbasis-Anzeige) | **CSRF-Schutz** auf allen ändernden Requests, **SSO über Microsoft Entra ID / OIDC** mit Gruppen-Rollen und zentralem Offboarding, **verschlüsseltes Postfachpasswort** (Schlüssel aus `SECRET_KEY`, Migration per `manage.py migrate-smtp-password`), **Sicherheits-CI** (CodeQL, Semgrep, ZAP, pip-audit als hartes Tor, Dependabot), **Regelbasis** auf Ergebnis und Beförderungspapier, Erstzugang abschaltbar (`ADR_BOOTSTRAP_ADMIN=0`); Vorgehensweise: [docs/code-audit.md](docs/code-audit.md) |
+| **4.3.1** | Formulierungen im Quelltext und in der Dokumentation neutralisiert — das MIT-lizenzierte Projekt nennt seine Beweggründe ohne Bezug auf einen konkreten Rezensenten | Keine Funktionsänderung; Anleitung als 4.3.1 neu erzeugt |
+| **4.3.0** | Härtung für den Einsatz in größeren Organisationen (SAST/DAST, zentrale Identitätsverwaltung, verschlüsselte Zugangsdaten, Regelbasis-Anzeige) | **CSRF-Schutz** auf allen ändernden Requests, **SSO über Microsoft Entra ID / OIDC** mit Gruppen-Rollen und zentralem Offboarding, **verschlüsseltes Postfachpasswort** (Schlüssel aus `SECRET_KEY`, Migration per `manage.py migrate-smtp-password`), **Sicherheits-CI** (CodeQL, Semgrep, ZAP, pip-audit als hartes Tor, Dependabot), **Regelbasis** auf Ergebnis und Beförderungspapier, Erstzugang abschaltbar (`ADR_BOOTSTRAP_ADMIN=0`); Vorgehensweise: [docs/code-audit.md](docs/code-audit.md) |
 | **4.2.3** | Render zeigte trotz der neuen Blueprint bisher noch die offene User-Ansicht | `render.yaml` aktiviert die Anmeldung; vollständige Admin-Oberfläche mit Benutzerverwaltung, Einstellungen und ADR-Import, Erstzugang `admin`/`admin` mit erzwungenem Passwortwechsel; Anleitung und Deployment-Dokumentation auf 4.2.3 aktualisiert |
 | **4.2.2** | Erststart mit **leerem Datenverzeichnis** brach ab: zwei Worker initialisierten die Datenbank gleichzeitig, einer verlor das Rennen um die SQLite-Sperre (`database is locked`, Exit 3) | Anwendung wird mit `--preload` geladen — `init_db()` läuft einmal im Master. Betraf jede frisch aufgesetzte Instanz, auch Test- und Hosting-Umgebungen. Dazu eine **fertige `render.yaml`** für eine öffentliche Instanz mit Anmeldung und vollem Administratorzugang (kostenloser Instanztyp) |
 | **4.2.1** | Oberfläche verwies auf eine Passwortdatei, die es seit 4.1 nicht mehr gibt | Hinweis auf der Seite *Passwort ändern* korrigiert — kein Verhalten geändert |
@@ -349,7 +350,7 @@ der Beförderungskategorie aus Tabelle A, Spalte (15).
 | `ADR_AUDIT_RETENTION_DAYS` | nein | `0` (aus) | Aufbewahrungsfrist des Audit-Logs in Tagen — siehe `DSGVO.md`. |
 | `ADR_AUDIT_LOG_IP` | nein | `1` | `0` schreibt keine IP-Adressen ins Audit-Log. |
 | `ADR_DB_DIR` / `ADR_DB_PATH` | nein | `/app/data` | Datenverzeichnis/-datei — für **mehrere Instanzen** auf einem Server. |
-| `ADR_BOOTSTRAP_ADMIN` | nein | `1` | `0` legt den dokumentierten Erstzugang nicht mehr automatisch an (Konzernbetrieb: erster Zugang kommt aus dem SSO oder aus `manage.py bootstrap-admin`). |
+| `ADR_BOOTSTRAP_ADMIN` | nein | `1` | `0` legt den dokumentierten Erstzugang nicht mehr automatisch an (Unternehmensbetrieb: erster Zugang kommt aus dem SSO oder aus `manage.py bootstrap-admin`). |
 | `ADR_OIDC_ENABLED` | nein | `0` | `1` aktiviert die Anmeldung über OpenID Connect / Microsoft Entra ID (siehe unten). |
 | `ADR_OIDC_ISSUER` | bei SSO | — | z. B. `https://login.microsoftonline.com/<tenant-id>/v2.0`. |
 | `ADR_OIDC_CLIENT_ID` / `ADR_OIDC_CLIENT_SECRET` | bei SSO | — | Zugangsdaten der App-Registrierung (geheimer Wert gehört in die Umgebung, nicht in die Datenbank). |
@@ -372,7 +373,7 @@ der Beförderungskategorie aus Tabelle A, Spalte (15).
 | UN-Datenbank bearbeiten, Datenimport, Verifikation | ✓ | — |
 | Sendungen löschen | ✓ | — |
 
-### Konzernanmeldung (SSO — Microsoft Entra ID / OpenID Connect)
+### Unternehmensanmeldung (SSO — Microsoft Entra ID / OpenID Connect)
 
 Die lokale Benutzerverwaltung bleibt vollständig bestehen; zusätzlich kann
 sich die Anwendung gegen einen zentralen Identitätsanbieter anmelden
@@ -493,7 +494,7 @@ docker run -d --name adr-rechner --restart unless-stopped \
   -e SECRET_KEY="$(cat ~/adr_secret.key)" -e TZ=Europe/Berlin \
   kissberg/adr-rechner:latest
 curl -s http://127.0.0.1:5050/healthz
-# {"status":"ok","un_numbers":3374,"version":"4.2.3"}
+# {"status":"ok","un_numbers":3374,"version":"4.3.1"}
 ```
 
 Datenbankänderungen laufen beim Start automatisch (`CREATE TABLE IF NOT EXISTS`
@@ -575,7 +576,7 @@ gemeldet) und die Prüfsummen dokumentieren. Ein eigener PDF-Parser steht als
 
 ## Dokumentation
 
-* **[Installations- und Bedienungsanleitung (PDF, Version 4.3.0)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.3.0.pdf)**
+* **[Installations- und Bedienungsanleitung (PDF, Version 4.3.1)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.3.1.pdf)**
   — 41 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
   E-Mail-Einstellungen, Rechner, CSRF/SSO, Beförderungspapier, Datenschutz, Betrieb.
 * [CHANGELOG.md](CHANGELOG.md) — Änderungen je Version mit Begründung

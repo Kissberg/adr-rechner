@@ -214,7 +214,7 @@ def latest_adr_version() -> str:
 # ----------------------------------------------------------------
 # Hilfsfunktionen
 # ----------------------------------------------------------------
-APP_VERSION = "4.3.0"
+APP_VERSION = "4.3.1"
 
 
 def get_db_conn():
@@ -615,7 +615,7 @@ def calculate():
         transport_form, transport_form)
     # Rechtsgrund der Prüfung mitliefern — die Oberfläche zeigt ihn am
     # Ergebnis an, damit jede Berechnung ihrem Datenstand zugeordnet
-    # werden kann (Forderung aus dem Konzern-Review).
+    # werden kann (Nachvollziehbarkeit des Rechtsstands).
     payload["regelbasis"] = {
         "version": latest_adr_version(),
         "import_date": _regelbasis_fallback().get("import_date"),

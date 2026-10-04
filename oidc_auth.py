@@ -1,5 +1,5 @@
 """
-oidc_auth.py — Optionale Konzernanmeldung über OpenID Connect
+oidc_auth.py — Optionale Unternehmensanmeldung über OpenID Connect
 
 Die lokale Benutzerdatenbank bleibt vollständig bestehen; dieses Modul
 ergänzt sie um eine Anmeldung über einen zentralen Identitätsanbieter
@@ -39,7 +39,7 @@ Ablösung der Session
   /auth/logout beendet die Session dieser Anwendung. Die Sitzung beim
   Identitätsanbieter (z. B. das Angemeldet-Sein in Office 365) bleibt
   bestehen — eine Single-Logout-Kette ist nicht implementiert und wird
-  im Konzernbetrieb vom zentralen IdP geregelt (siehe README).
+  im Unternehmensbetrieb vom zentralen IdP geregelt (siehe README).
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ def configure_oidc(app) -> None:
 
 def _redirect_uri() -> str:
     # `_external=True` leitet sich aus dem Host-Header ab. Im
-    # Konzernbetrieb wird ADR_OIDC_REDIRECT_URI gesetzt (dann greift der
+    # Unternehmensbetrieb wird ADR_OIDC_REDIRECT_URI gesetzt (dann greift der
     # obige Wert) — und der Identitätsanbieter akzeptiert ohnehin nur
     # Redirect-URIs, die in der App-Registrierung eingetragen sind;
     # ein manipulierter Host führt zu einer Ablehnung dort, nicht zu

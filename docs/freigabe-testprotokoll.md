@@ -79,7 +79,7 @@ Abweichungen sind vor der Freigabe zu klären.
   Prüfpflichten des Absenders; die Freigabe dokumentiert die
   Vertrauenswürdigkeit der Berechnung, nicht ein Haftungsinstrument
   (Haftungsausschluss der MIT-Lizenz bleibt unberührt — die
-  Konzernseite trägt die organisatorische Verantwortung durch dieses
+  betreibende Stelle trägt die organisatorische Verantwortung durch dieses
   Verfahren).
 
 ## 5. Prüfungsvermerk

@@ -1,7 +1,7 @@
 """
 Tests des Bootstrap-Schalters für den Erstzugang (auth.py).
 
-Im Konzernbetrieb ist der automatische Erstzugang (admin/admin) üblich-
+Im Unternehmensbetrieb ist der automatische Erstzugang (admin/admin) üblich-
 weise unerwünscht: ADR_BOOTSTRAP_ADMIN=0 legt kein Konto an — der erste
 Zugang kommt dann aus dem Identitätsanbieter (SSO) oder aus
 `manage.py bootstrap-admin`.
