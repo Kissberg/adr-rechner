@@ -575,9 +575,9 @@ gemeldet) und die Prüfsummen dokumentieren. Ein eigener PDF-Parser steht als
 
 ## Dokumentation
 
-* **[Installations- und Bedienungsanleitung (PDF, Version 4.2.3)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.2.3.pdf)**
-  — 37 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
-  E-Mail-Einstellungen, Rechner, Beförderungspapier, Datenschutz, Betrieb.
+* **[Installations- und Bedienungsanleitung (PDF, Version 4.3.0)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.3.0.pdf)**
+  — 41 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
+  E-Mail-Einstellungen, Rechner, CSRF/SSO, Beförderungspapier, Datenschutz, Betrieb.
 * [CHANGELOG.md](CHANGELOG.md) — Änderungen je Version mit Begründung
 * [docs/code-audit.md](docs/code-audit.md) — Code-Audit: SAST/DAST-Vorgehen, OWASP-Zuordnung, Befunde
 * [SECURITY.md](SECURITY.md) — Sicherheitsrichtlinie und Meldeweg
