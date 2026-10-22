@@ -4,10 +4,36 @@ Alle nennenswerten Änderungen dieses Projekts. Die Versionierung folgt
 `MAJOR.MINOR.PATCH`; jeder Eintrag nennt die Beweggründe, nicht nur die
 Änderung.
 
-- **Aktuelle Version:** 4.3.2 (Datenstand ADR 2025)
+- **Aktuelle Version:** 4.3.3 (Datenstand ADR 2025)
 - **Datenquelle:** Datenbank GEFAHRGUT der BAM (`dl-de/by-2-0`)
 
 ---
+
+## 4.3.3 — CI-Aktionen aktualisiert (Wartungsrelease)
+
+**Anlass:** Fünf Dependabot-Vorschläge für die im CI verwendeten GitHub
+Actions standen offen. Sie werden gesammelt eingespielt, statt fünf
+Pull Requests einzeln zu mergen und damit fünf Läufe mit identischem
+Ergebnis zu erzeugen.
+
+**Geändert** (alle weiterhin auf 40-stellige Commit-SHAs gepinnt, damit ein
+beweglicher Tag keine ungeprüfte Version einziehen kann)
+
+- `actions/checkout` v4.4.0 → **v7.0.1**
+- `actions/setup-python` v5.6.0 → **v7.0.0**
+- `actions/upload-artifact` v4.6.2 → **v7.0.2**
+- `github/codeql-action` init/autobuild/analyze v3.38.2 → **v4.38.2**
+  (init wurde mitgezogen, damit die drei CodeQL-Schritte dieselbe Version nutzen)
+- **Keine Änderung an Anwendung, Datenbank oder Oberfläche**;
+  `APP_VERSION` = 4.3.3, damit Image, Healthcheck und Anleitung zusammenpassen
+
+**Geprüft**
+
+- 192 Tests grün, `pip-audit` ohne Befund (unverändert)
+- CI-Lauf und Security-Lauf mit den neuen Action-Versionen grün
+  (Test 3.11/3.12, Docker-Build, CodeQL, Semgrep, ZAP-Baseline)
+- Erststart auf leerem Volume geprüft, `/healthz` meldet `version: "4.3.3"`
+- Anleitung als 4.3.3 neu erzeugt
 
 ## 4.3.2 — Sicherheitsupdate der Laufzeitabhängigkeiten
 
