@@ -16,7 +16,7 @@ keine externen Dienste.
 > application, deployed as a single Docker container.
 
 <p align="center">
-  <img alt="Version 4.3.1" src="https://img.shields.io/badge/version-4.3.1-green">
+  <img alt="Version 4.3.2" src="https://img.shields.io/badge/version-4.3.2-green">
   <img alt="Tests: 192" src="https://img.shields.io/badge/tests-192-brightgreen">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
   <img alt="ADR 2025" src="https://img.shields.io/badge/ADR-2025-informational">
@@ -74,6 +74,7 @@ Einzelmaßnahmen und Testzahlen stehen in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Anlass | Kern der Verbesserung |
 |---|---|---|
+| **4.3.2** | Das harte `pip-audit`-Tor der CI schlug auf **Werkzeug 3.1.8** an (PYSEC-2026-4312) — ein Befund ohne jede Codeänderung, der auch das ausgelieferte Image 4.3.1 betraf | Sicherheitsupdate der Laufzeitabhängigkeiten: Werkzeug 3.1.9, ReportLab 5.0.1, PyMuPDF 1.28.2, authlib 1.9.1. Keine Funktionsänderung; 192 Tests grün, `pip-audit` ohne Befund, Image `4.3.2` |
 | **4.3.1** | Formulierungen im Quelltext und in der Dokumentation neutralisiert — das MIT-lizenzierte Projekt nennt seine Beweggründe ohne Bezug auf einen konkreten Rezensenten | Keine Funktionsänderung; Anleitung als 4.3.1 neu erzeugt |
 | **4.3.0** | Härtung für den Einsatz in größeren Organisationen (SAST/DAST, zentrale Identitätsverwaltung, verschlüsselte Zugangsdaten, Regelbasis-Anzeige) | **CSRF-Schutz** auf allen ändernden Requests, **SSO über Microsoft Entra ID / OIDC** mit Gruppen-Rollen und zentralem Offboarding, **verschlüsseltes Postfachpasswort** (Schlüssel aus `SECRET_KEY`, Migration per `manage.py migrate-smtp-password`), **Sicherheits-CI** (CodeQL, Semgrep, ZAP, pip-audit als hartes Tor, Dependabot), **Regelbasis** auf Ergebnis und Beförderungspapier, Erstzugang abschaltbar (`ADR_BOOTSTRAP_ADMIN=0`); Vorgehensweise: [docs/code-audit.md](docs/code-audit.md) |
 | **4.2.3** | Render zeigte trotz der neuen Blueprint bisher noch die offene User-Ansicht | `render.yaml` aktiviert die Anmeldung; vollständige Admin-Oberfläche mit Benutzerverwaltung, Einstellungen und ADR-Import, Erstzugang `admin`/`admin` mit erzwungenem Passwortwechsel; Anleitung und Deployment-Dokumentation auf 4.2.3 aktualisiert |
@@ -494,7 +495,7 @@ docker run -d --name adr-rechner --restart unless-stopped \
   -e SECRET_KEY="$(cat ~/adr_secret.key)" -e TZ=Europe/Berlin \
   kissberg/adr-rechner:latest
 curl -s http://127.0.0.1:5050/healthz
-# {"status":"ok","un_numbers":3374,"version":"4.3.1"}
+# {"status":"ok","un_numbers":3374,"version":"4.3.2"}
 ```
 
 Datenbankänderungen laufen beim Start automatisch (`CREATE TABLE IF NOT EXISTS`
@@ -576,8 +577,8 @@ gemeldet) und die Prüfsummen dokumentieren. Ein eigener PDF-Parser steht als
 
 ## Dokumentation
 
-* **[Installations- und Bedienungsanleitung (PDF, Version 4.3.1)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.3.1.pdf)**
-  — 41 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
+* **[Installations- und Bedienungsanleitung (PDF, Version 4.3.2)](docs/ADR-1000-Punkte-Rechner-Installations-und-Bedienungsanleitung-v4.3.2.pdf)**
+  — 42 Seiten deutsch: Installation, erste Inbetriebnahme, Benutzerverwaltung,
   E-Mail-Einstellungen, Rechner, CSRF/SSO, Beförderungspapier, Datenschutz, Betrieb.
 * [CHANGELOG.md](CHANGELOG.md) — Änderungen je Version mit Begründung
 * [docs/code-audit.md](docs/code-audit.md) — Code-Audit: SAST/DAST-Vorgehen, OWASP-Zuordnung, Befunde
@@ -609,7 +610,7 @@ adr-rechner/
 ├── data/bam/               # BAM-Datei (ADR 2025) + Lizenzhinweis
 ├── docs/                   # Anleitung (PDF), Screenshots
 ├── static/ templates/      # Bootstrap 5, Vanilla JS, Jinja2
-├── tests/                  # 160 Tests (pytest)
+├── tests/                  # 192 Tests (pytest)
 ├── DSGVO.md  PLAN.md  CHANGELOG.md
 ├── Dockerfile              # python:3.11-slim + gunicorn, unprivilegiert
 └── docker-compose.yml

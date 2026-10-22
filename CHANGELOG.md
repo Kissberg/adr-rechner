@@ -4,10 +4,38 @@ Alle nennenswerten Änderungen dieses Projekts. Die Versionierung folgt
 `MAJOR.MINOR.PATCH`; jeder Eintrag nennt die Beweggründe, nicht nur die
 Änderung.
 
-- **Aktuelle Version:** 4.3.1 (Datenstand ADR 2025)
+- **Aktuelle Version:** 4.3.2 (Datenstand ADR 2025)
 - **Datenquelle:** Datenbank GEFAHRGUT der BAM (`dl-de/by-2-0`)
 
 ---
+
+## 4.3.2 — Sicherheitsupdate der Laufzeitabhängigkeiten
+
+**Anlass:** Das harte `pip-audit`-Tor der CI schlug auf **Werkzeug 3.1.8**
+an (PYSEC-2026-4312, behoben in 3.1.9). Der Befund entstand ohne jede
+Änderung am Anwendungscode und traf auch das ausgelieferte Image 4.3.1 —
+deshalb ein eigenes Patch-Release, statt die Korrektur nur im Repository
+zu haben. Die übrigen offenen Dependabot-Vorschläge für
+Laufzeitbibliotheken werden mitgenommen, damit nicht mehrere
+Patch-Releases unmittelbar aufeinander folgen.
+
+**Geändert**
+
+- `Werkzeug 3.1.8 → 3.1.9` — behebt PYSEC-2026-4312
+- `ReportLab 5.0.0 → 5.0.1`, `PyMuPDF 1.27.2.2 → 1.28.2`,
+  `authlib 1.6.12 → 1.9.1`
+- **Keine Codeänderung** an Funktionen oder Oberfläche; `APP_VERSION` = 4.3.2
+
+**Geprüft**
+
+- **192 Tests** grün (unverändert, keine Testanpassung nötig)
+- `pip-audit --requirement requirements.txt --strict` und
+  `--requirement requirements-dev.txt --strict`: **ohne Befund**
+- CI-Lauf (Test 3.11/3.12, Docker-Build) und Security-Lauf
+  (CodeQL, Semgrep, ZAP-Baseline) grün
+- Erststart auf leerem Volume mit dem Standard-CMD (`--preload`) geprüft,
+  `/healthz` meldet `version: "4.3.2"`, UN-Daten 3.374 Varianten
+- Anleitung als 4.3.2 neu erzeugt (Screenshots aus frischer Instanz)
 
 ## 4.3.1 — Neutrale Formulierungen in Quelltext und Dokumentation
 
